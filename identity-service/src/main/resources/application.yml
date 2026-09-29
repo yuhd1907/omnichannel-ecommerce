@@ -1,0 +1,29 @@
+spring:
+  application:
+    name: identity-service
+  datasource:
+    url: ${IDENTITY_DATASOURCE_URL:jdbc:postgresql://localhost:5432/identity_db}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:postgrespassword}
+  jpa:
+    open-in-view: false
+    hibernate:
+      # Flyway quan ly schema -> Ngay 4 doi thanh 'validate' khi da co entity + migration.
+      ddl-auto: none
+  flyway:
+    # Ngay 4: bat len khi da co file migration dau tien trong db/migration.
+    enabled: false
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+server:
+  port: ${IDENTITY_PORT:8081}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always

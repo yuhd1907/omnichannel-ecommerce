@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: product-service
+  datasource:
+    url: ${PRODUCT_DATASOURCE_URL:jdbc:postgresql://localhost:5432/product_db}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:postgrespassword}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+  flyway:
+    enabled: false
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+server:
+  port: ${PRODUCT_PORT:8082}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always

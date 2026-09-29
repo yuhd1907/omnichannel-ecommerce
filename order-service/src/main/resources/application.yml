@@ -1,0 +1,46 @@
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: ${ORDER_DATASOURCE_URL:jdbc:postgresql://localhost:5432/order_db}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:postgrespassword}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+  flyway:
+    enabled: false
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_DEFAULT_USER:guest}
+    password: ${RABBITMQ_DEFAULT_PASS:guest}
+
+server:
+  port: ${ORDER_PORT:8083}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+# Cau hinh nghiep vu rieng cua Order (dung o Ngay 6/9)
+app:
+  inventory:
+    # Thoi han giu hang cho don PENDING truoc khi job timeout nha kho.
+    reservation-ttl-minutes: 15
+  lock:
+    # Redisson lock theo sku_code khi reserve (Ngay 9).
+    wait-time-ms: 3000
+    lease-time-ms: 5000

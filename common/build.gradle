@@ -1,0 +1,6 @@
+// Module dung chung giua cac service.
+// CHI chua contract cho response (DTO thuan Java) - KHONG chua JPA entity,
+// domain hay logic nghiep vu, de tranh coupling giua cac service.
+plugins {
+    id 'java-library'
+}

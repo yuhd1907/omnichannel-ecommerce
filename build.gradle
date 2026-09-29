@@ -1,0 +1,54 @@
+// ==========================================================================
+//  Root build - cau hinh DUNG CHUNG cho tat ca module.
+//  Version cua Spring Boot / Spring Dependency Management khai bao MOT CHO
+//  tai day; module con chi can 'id ...' khong kem version.
+// ==========================================================================
+plugins {
+    id 'org.springframework.boot' version '4.1.1' apply false
+    id 'io.spring.dependency-management' version '1.1.7' apply false
+}
+
+allprojects {
+    group = 'ra.edu'
+    version = '0.0.1-SNAPSHOT'
+
+    repositories {
+        mavenCentral()
+    }
+}
+
+subprojects {
+    apply plugin: 'java'
+
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(17)
+        }
+    }
+
+    def loadDotEnv = {
+        def envFile = rootProject.file('.env')
+        def envVars = [:]
+        if (envFile.exists()) {
+            envFile.readLines().each { line ->
+                line = line.trim()
+                if (line && !line.startsWith('#') && line.contains('=')) {
+                    def (key, value) = line.split('=', 2)
+                    envVars[key.trim()] = value.trim()
+                }
+            }
+        }
+        return envVars
+    }
+
+    def envVars = loadDotEnv()
+
+    tasks.withType(Test).configureEach {
+        useJUnitPlatform()
+        environment envVars
+    }
+
+    tasks.matching { it.name == 'bootRun' }.configureEach {
+        environment envVars
+    }
+}

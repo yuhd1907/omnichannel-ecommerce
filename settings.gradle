@@ -1,0 +1,9 @@
+rootProject.name = 'omnichannel-ecommerce'
+
+include 'common'
+include 'api-gateway'
+include 'identity-service'
+include 'product-service'
+include 'order-service'
+include 'payment-service'
+include 'notification-service'

@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      server:
+        webflux:
+          # Ngay 7: khai bao route toi cac service + filter xac thuc JWT.
+          routes: []
+
+server:
+  port: ${GATEWAY_PORT:8080}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always

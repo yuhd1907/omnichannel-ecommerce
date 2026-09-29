@@ -1,0 +1,28 @@
+# Git & IDE
+.git
+.gitignore
+.gitattributes
+.idea
+*.iml
+
+# Gradle cache / build output (KHONG anh huong build.gradle)
+.gradle
+**/.gradle
+build
+**/build
+out
+**/out
+
+# Bi mat - tuyet doi khong dua vao image
+.env
+.env.local
+
+# Tai lieu & ha tang - khong can khi build jar
+docs
+docker
+docker-compose.yml
+*.md
+
+# Log
+*.log
+logs

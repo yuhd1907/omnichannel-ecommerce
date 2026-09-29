@@ -1,0 +1,32 @@
+spring:
+  application:
+    name: payment-service
+  datasource:
+    url: ${PAYMENT_DATASOURCE_URL:jdbc:postgresql://localhost:5432/payment_db}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:postgrespassword}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+  flyway:
+    enabled: false
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_DEFAULT_USER:guest}
+    password: ${RABBITMQ_DEFAULT_PASS:guest}
+
+server:
+  port: ${PAYMENT_PORT:8084}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always

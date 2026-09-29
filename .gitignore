@@ -3,7 +3,7 @@
 .env.local
 .env.*.local
 *.local
-! .env.example
+!.env.example
 
 # INTELLIJ IDEA
 .idea/
@@ -14,6 +14,7 @@ out/
 
 # GRADLE BUILD
 .gradle/
+**/.gradle/
 build/
 **/build/
 !gradle/wrapper/gradle-wrapper.jar
@@ -21,7 +22,6 @@ build/
 
 # COMPILED CLASSES & PACKAGES
 *.class
-*.jar
 *.war
 *.ear
 *.nar
