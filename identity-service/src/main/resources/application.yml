@@ -9,10 +9,10 @@ spring:
     open-in-view: false
     hibernate:
       # Flyway quan ly schema -> Ngay 4 doi thanh 'validate' khi da co entity + migration.
-      ddl-auto: none
+      ddl-auto: validate
   flyway:
     # Ngay 4: bat len khi da co file migration dau tien trong db/migration.
-    enabled: false
+    enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
 
@@ -27,3 +27,8 @@ management:
   endpoint:
     health:
       show-details: always
+
+jwt:
+  secret: ${JWT_SECRET:404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
+  access-token-expiration: ${JWT_ACCESS_TOKEN_EXPIRATION:900000} # 15 minutes (ms)
+  refresh-token-expiration: ${JWT_REFRESH_TOKEN_EXPIRATION:604800000} # 7 days (ms)
