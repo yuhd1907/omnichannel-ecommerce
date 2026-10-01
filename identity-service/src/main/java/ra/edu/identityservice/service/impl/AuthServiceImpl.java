@@ -23,6 +23,7 @@ import ra.edu.identityservice.repository.UserRepository;
 import ra.edu.identityservice.security.JwtService;
 import ra.edu.identityservice.service.AuthService;
 import ra.edu.identityservice.util.TokenHashUtil;
+import ra.edu.common.security.JwtVerifier;
 
 import java.time.Instant;
 import java.util.List;
@@ -39,6 +40,7 @@ public class AuthServiceImpl implements AuthService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final JwtVerifier jwtVerifier;
 
     @Override
     @Transactional
@@ -116,7 +118,7 @@ public class AuthServiceImpl implements AuthService {
             throw new InvalidRefreshTokenException("Refresh token cannot be blank");
         }
 
-        if (!jwtService.isTokenValid(rawRefreshToken)) {
+        if (!jwtVerifier.isValid(rawRefreshToken)) {
             throw new InvalidRefreshTokenException("Invalid refresh token signature or expired");
         }
 

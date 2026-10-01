@@ -26,6 +26,10 @@ subprojects {
         }
     }
 
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+    }
+
     def loadDotEnv = {
         def envFile = rootProject.file('.env')
         def envVars = [:]

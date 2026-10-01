@@ -1,6 +1,30 @@
 // Module dung chung giua cac service.
-// CHI chua contract cho response (DTO thuan Java) - KHONG chua JPA entity,
-// domain hay logic nghiep vu, de tranh coupling giua cac service.
+// CHI chua contract cho response (DTO thuan Java) va JWT verify infrastructure — 
+// KHONG chua JPA entity, domain hay logic nghiep vu, de tranh coupling giua cac service.
 plugins {
     id 'java-library'
+    id 'io.spring.dependency-management'
+}
+
+dependencyManagement {
+    imports {
+        mavenBom "org.springframework.boot:spring-boot-dependencies:4.1.1"
+    }
+}
+
+dependencies {
+    // Response contract (DTO thuan Java)
+    // Khong co dependency nao them vao de tranh transitive pollution
+
+    // JWT verify — api scope de transitive sang service su dung common
+    api 'io.jsonwebtoken:jjwt-api:0.13.0'
+
+    // Spring Security (api scope: service dung common khong can khai bao lai)
+    api 'org.springframework.boot:spring-boot-starter-security'
+
+    // Jakarta Servlet API can cho filter
+    compileOnly 'jakarta.servlet:jakarta.servlet-api'
+
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
 }

@@ -1,20 +1,25 @@
 package ra.edu.identityservice.security;
 
-import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
 import org.springframework.stereotype.Service;
+import ra.edu.common.security.JwtVerifier;
 
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
+/**
+ * Chỉ chứa logic PHÁT HÀNH token (generateAccessToken, generateRefreshToken).
+ * Verify/parse token dùng {@link JwtVerifier} từ module common.
+ */
 @Service
 public class JwtService {
 
     private final SecretKey signingKey;
+    private final String secret;
     private final long accessTokenExpiration;
     private final long refreshTokenExpiration;
 
@@ -23,9 +28,19 @@ public class JwtService {
             @Value("${jwt.access-token-expiration}") long accessTokenExpiration,
             @Value("${jwt.refresh-token-expiration}") long refreshTokenExpiration
     ) {
+        this.secret = secret;
         this.signingKey = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
         this.accessTokenExpiration = accessTokenExpiration;
         this.refreshTokenExpiration = refreshTokenExpiration;
+    }
+
+    /**
+     * Bean dùng chung cho filter xác thực trong identity-service.
+     * Mọi service khác tự tạo bean JwtVerifier riêng với secret từ môi trường.
+     */
+    @Bean
+    public JwtVerifier jwtVerifier() {
+        return new JwtVerifier(secret);
     }
 
     /**
@@ -55,42 +70,6 @@ public class JwtService {
                 .expiration(new Date(now.getTime() + refreshTokenExpiration))
                 .signWith(signingKey)
                 .compact();
-    }
-
-    /**
-     * Parse va verify token. Tra ve Claims neu hop le, nem JwtException neu khong.
-     */
-    public Claims parseToken(String token) {
-        return Jwts.parser()
-                .verifyWith(signingKey)
-                .build()
-                .parseSignedClaims(token)
-                .getPayload();
-    }
-
-    /**
-     * Verify token hop le hay khong (khong nem exception).
-     */
-    public boolean isTokenValid(String token) {
-        try {
-            parseToken(token);
-            return true;
-        } catch (JwtException | IllegalArgumentException e) {
-            return false;
-        }
-    }
-
-    public UUID getUserId(String token) {
-        return UUID.fromString(parseToken(token).getSubject());
-    }
-
-    public String getEmail(String token) {
-        return parseToken(token).get("email", String.class);
-    }
-
-    @SuppressWarnings("unchecked")
-    public List<String> getRoles(String token) {
-        return parseToken(token).get("roles", List.class);
     }
 
     public long getAccessTokenExpiration() {
