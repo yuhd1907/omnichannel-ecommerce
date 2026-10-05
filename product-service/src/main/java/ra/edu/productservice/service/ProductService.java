@@ -8,6 +8,9 @@ import ra.edu.productservice.dto.ProductSummaryDto;
 import ra.edu.productservice.dto.request.CreateProductRequest;
 import ra.edu.productservice.dto.request.CreateSkuRequest;
 
+import ra.edu.productservice.dto.request.UpdateProductRequest;
+import ra.edu.productservice.dto.request.UpdateSkuRequest;
+
 import java.util.UUID;
 
 public interface ProductService {
@@ -19,4 +22,12 @@ public interface ProductService {
     ProductDetailDto createProduct(CreateProductRequest request);
 
     ProductSkuDto addSkuToProduct(UUID productId, CreateSkuRequest request);
+
+    ProductDetailDto updateProduct(UUID id, UpdateProductRequest req);
+
+    ProductSkuDto updateSku(String skuCode, UpdateSkuRequest req);
+
+    void deleteProduct(UUID id);
+
+    void deleteSku(String skuCode);
 }

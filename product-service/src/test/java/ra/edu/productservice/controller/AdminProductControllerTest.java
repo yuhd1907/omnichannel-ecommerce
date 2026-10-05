@@ -20,6 +20,8 @@ import java.util.UUID;
 
 import static org.hamcrest.Matchers.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -215,5 +217,82 @@ class AdminProductControllerTest {
                         .content(body))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("SKU_EXISTS"));
+    }
+
+    @Test
+    @DisplayName("PATCH /api/v1/admin/products/{id} - Admin cập nhật thông tin sản phẩm thành công trả về 200")
+    void testUpdateProductSuccess() throws Exception {
+        UUID productId = UUID.fromString("c0000000-0000-0000-0000-000000000001");
+
+        String body = """
+                {
+                    "name": "iPhone 15 Pro Max 2026 Edition",
+                    "description": "Updated description"
+                }
+                """;
+
+        mockMvc.perform(patch("/api/v1/admin/products/{id}", productId)
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("PRODUCT_UPDATED"))
+                .andExpect(jsonPath("$.data.name").value("iPhone 15 Pro Max 2026 Edition"))
+                .andExpect(jsonPath("$.data.description").value("Updated description"));
+    }
+
+    @Test
+    @DisplayName("PATCH /api/v1/admin/products/skus/{skuCode} - Admin cập nhật giá SKU thành công trả về 200")
+    void testUpdateSkuPriceSuccess() throws Exception {
+        String body = """
+                {
+                    "price": 200000.00
+                }
+                """;
+
+        mockMvc.perform(patch("/api/v1/admin/products/skus/{skuCode}", "AO-A-DO-M")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("SKU_UPDATED"))
+                .andExpect(jsonPath("$.data.skuCode").value("AO-A-DO-M"))
+                .andExpect(jsonPath("$.data.price").value(200000.00));
+    }
+
+    @Test
+    @DisplayName("PATCH /api/v1/admin/products/skus/{skuCode} - User thường cập nhật giá SKU trả về 403 Forbidden")
+    void testUpdateSkuPriceWithUserRoleForbidden() throws Exception {
+        String body = """
+                {
+                    "price": 200000.00
+                }
+                """;
+
+        mockMvc.perform(patch("/api/v1/admin/products/skus/{skuCode}", "AO-A-DO-M")
+                        .header("Authorization", "Bearer " + userToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("ACCESS_DENIED"))
+                .andExpect(jsonPath("$.message").value("Access denied"));
+    }
+
+    @Test
+    @DisplayName("DELETE /api/v1/admin/products/{id} - Soft delete product trả về 204")
+    void testSoftDeleteProductSuccess() throws Exception {
+        UUID productId = UUID.fromString("c0000000-0000-0000-0000-000000000001");
+
+        mockMvc.perform(delete("/api/v1/admin/products/{id}", productId)
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isNoContent());
+    }
+
+    @Test
+    @DisplayName("DELETE /api/v1/admin/products/skus/{skuCode} - Xoá SKU trả về 204")
+    void testDeleteSkuSuccess() throws Exception {
+        mockMvc.perform(delete("/api/v1/admin/products/skus/{skuCode}", "AO-A-DO-M")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isNoContent());
     }
 }

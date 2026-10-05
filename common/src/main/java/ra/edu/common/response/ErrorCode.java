@@ -28,6 +28,8 @@ public final class ErrorCode {
     public static final String PAYMENT_ALREADY_COMPLETED = "PAYMENT_ALREADY_COMPLETED";
 
     // Chung
+    public static final String UNAUTHORIZED = "UNAUTHORIZED";
+    public static final String ACCESS_DENIED = "ACCESS_DENIED";
     public static final String VALIDATION_FAILED = "VALIDATION_FAILED";
     public static final String INTERNAL_ERROR = "INTERNAL_ERROR";
 }

@@ -11,6 +11,8 @@ import ra.edu.productservice.dto.ProductDetailDto;
 import ra.edu.productservice.dto.ProductSkuDto;
 import ra.edu.productservice.dto.request.CreateProductRequest;
 import ra.edu.productservice.dto.request.CreateSkuRequest;
+import ra.edu.productservice.dto.request.UpdateProductRequest;
+import ra.edu.productservice.dto.request.UpdateSkuRequest;
 import ra.edu.productservice.service.ProductService;
 
 import java.util.UUID;
@@ -40,5 +42,35 @@ public class AdminProductController {
         ProductSkuDto result = productService.addSkuToProduct(id, request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.of("SKU_CREATED", "SKU created successfully", result));
+    }
+
+    @PatchMapping("/{id}")
+    public ResponseEntity<ApiResponse<ProductDetailDto>> updateProduct(
+            @PathVariable UUID id,
+            @Valid @RequestBody UpdateProductRequest request
+    ) {
+        ProductDetailDto result = productService.updateProduct(id, request);
+        return ResponseEntity.ok(ApiResponse.of("PRODUCT_UPDATED", "Product updated successfully", result));
+    }
+
+    @PatchMapping("/skus/{skuCode}")
+    public ResponseEntity<ApiResponse<ProductSkuDto>> updateSku(
+            @PathVariable String skuCode,
+            @Valid @RequestBody UpdateSkuRequest request
+    ) {
+        ProductSkuDto result = productService.updateSku(skuCode, request);
+        return ResponseEntity.ok(ApiResponse.of("SKU_UPDATED", "SKU updated successfully", result));
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> deleteProduct(@PathVariable UUID id) {
+        productService.deleteProduct(id);
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/skus/{skuCode}")
+    public ResponseEntity<Void> deleteSku(@PathVariable String skuCode) {
+        productService.deleteSku(skuCode);
+        return ResponseEntity.noContent().build();
     }
 }

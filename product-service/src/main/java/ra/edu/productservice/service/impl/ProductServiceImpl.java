@@ -12,6 +12,8 @@ import ra.edu.productservice.dto.ProductSkuDto;
 import ra.edu.productservice.dto.ProductSummaryDto;
 import ra.edu.productservice.dto.request.CreateProductRequest;
 import ra.edu.productservice.dto.request.CreateSkuRequest;
+import ra.edu.productservice.dto.request.UpdateProductRequest;
+import ra.edu.productservice.dto.request.UpdateSkuRequest;
 import ra.edu.productservice.entity.Brand;
 import ra.edu.productservice.entity.Category;
 import ra.edu.productservice.entity.Product;
@@ -25,6 +27,7 @@ import ra.edu.productservice.repository.ProductSkuRepository;
 import ra.edu.productservice.service.ProductService;
 
 import java.text.Normalizer;
+import java.time.Instant;
 import java.util.*;
 
 @Slf4j
@@ -41,8 +44,8 @@ public class ProductServiceImpl implements ProductService {
     @Transactional(readOnly = true)
     public PageData<ProductSummaryDto> getProducts(UUID categoryId, Pageable pageable) {
         Page<Product> page = (categoryId != null)
-                ? productRepository.findByCategoryId(categoryId, pageable)
-                : productRepository.findAll(pageable);
+                ? productRepository.findByCategoryIdAndStatus(categoryId, "ACTIVE", pageable)
+                : productRepository.findByStatus("ACTIVE", pageable);
 
         Page<ProductSummaryDto> dtoPage = page.map(ProductSummaryDto::from);
 
@@ -143,6 +146,85 @@ public class ProductServiceImpl implements ProductService {
 
         ProductSku savedSku = productSkuRepository.save(sku);
         return ProductSkuDto.from(savedSku);
+    }
+
+    @Override
+    @Transactional
+    public ProductDetailDto updateProduct(UUID id, UpdateProductRequest req) {
+        Product product = productRepository.findByIdWithDetails(id)
+                .orElseThrow(() -> new ResourceNotFoundException("PRODUCT_NOT_FOUND", "Product not found with id: " + id));
+
+        if (req.name() != null && !req.name().isBlank()) {
+            product.setName(req.name().trim());
+        }
+        if (req.description() != null) {
+            product.setDescription(req.description());
+        }
+        if (req.categoryId() != null) {
+            Category category = categoryRepository.findById(req.categoryId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Category not found with id: " + req.categoryId()));
+            product.setCategory(category);
+        }
+        if (req.brandId() != null) {
+            Brand brand = brandRepository.findById(req.brandId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Brand not found with id: " + req.brandId()));
+            product.setBrand(brand);
+        }
+        if (req.basePrice() != null) {
+            product.setBasePrice(req.basePrice());
+        }
+        if (req.status() != null && !req.status().isBlank()) {
+            product.setStatus(req.status().trim().toUpperCase());
+        }
+        product.setUpdatedAt(Instant.now());
+
+        Product savedProduct = productRepository.save(product);
+        return ProductDetailDto.from(savedProduct);
+    }
+
+    @Override
+    @Transactional
+    public ProductSkuDto updateSku(String skuCode, UpdateSkuRequest req) {
+        ProductSku sku = productSkuRepository.findBySkuCode(skuCode)
+                .orElseThrow(() -> new ResourceNotFoundException("SKU_NOT_FOUND", "SKU not found with skuCode: " + skuCode));
+
+        if (req.price() != null) {
+            sku.setPrice(req.price());
+        }
+        if (req.imageUrl() != null) {
+            sku.setImageUrl(req.imageUrl());
+        }
+        if (req.attributes() != null) {
+            sku.setAttributes(req.attributes());
+        }
+        sku.setUpdatedAt(Instant.now());
+
+        ProductSku savedSku = productSkuRepository.save(sku);
+        return ProductSkuDto.from(savedSku);
+    }
+
+    @Override
+    @Transactional
+    public void deleteProduct(UUID id) {
+        Product product = productRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("PRODUCT_NOT_FOUND", "Product not found with id: " + id));
+
+        product.setStatus("INACTIVE");
+        product.setUpdatedAt(Instant.now());
+        productRepository.save(product);
+    }
+
+    @Override
+    @Transactional
+    public void deleteSku(String skuCode) {
+        ProductSku sku = productSkuRepository.findBySkuCodeWithProduct(skuCode)
+                .orElseThrow(() -> new ResourceNotFoundException("SKU_NOT_FOUND", "SKU not found with skuCode: " + skuCode));
+
+        Product product = sku.getProduct();
+        if (product != null && product.getSkus() != null) {
+            product.getSkus().remove(sku);
+        }
+        productSkuRepository.delete(sku);
     }
 
     private String toSlug(String input) {

@@ -8,9 +8,9 @@ spring:
   jpa:
     open-in-view: false
     hibernate:
-      ddl-auto: none
+      ddl-auto: validate
   flyway:
-    enabled: false
+    enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
   data:
@@ -44,3 +44,24 @@ app:
     # Redisson lock theo sku_code khi reserve (Ngay 9).
     wait-time-ms: 3000
     lease-time-ms: 5000
+
+jwt:
+  secret: ${JWT_SECRET:my-very-secret-key-that-is-long-enough-for-hs256}
+
+# URL các service nội bộ (override bằng env var khi deploy trên Docker/K8s)
+app-clients:
+  product-service-url: ${PRODUCT_SERVICE_URL:http://localhost:8082}
+  identity-service-url: ${IDENTITY_SERVICE_URL:http://localhost:8081}
+
+# Feign client timeout — nếu service không phản hồi thì fail fast, không tạo đơn
+feign:
+  client:
+    config:
+      product-client:
+        url: ${PRODUCT_SERVICE_URL:http://localhost:8082}
+        connect-timeout: 2000   # ms
+        read-timeout: 3000      # ms
+      identity-client:
+        url: ${IDENTITY_SERVICE_URL:http://localhost:8081}
+        connect-timeout: 2000
+        read-timeout: 3000
