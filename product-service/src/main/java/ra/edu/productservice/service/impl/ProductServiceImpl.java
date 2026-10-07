@@ -10,6 +10,7 @@ import ra.edu.common.response.PageData;
 import ra.edu.productservice.dto.ProductDetailDto;
 import ra.edu.productservice.dto.ProductSkuDto;
 import ra.edu.productservice.dto.ProductSummaryDto;
+import ra.edu.productservice.dto.SkuInfoDto;
 import ra.edu.productservice.dto.request.CreateProductRequest;
 import ra.edu.productservice.dto.request.CreateSkuRequest;
 import ra.edu.productservice.dto.request.UpdateProductRequest;
@@ -225,6 +226,35 @@ public class ProductServiceImpl implements ProductService {
             product.getSkus().remove(sku);
         }
         productSkuRepository.delete(sku);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public SkuInfoDto getSkuInfo(String skuCode) {
+        return productSkuRepository.findBySkuCodeWithProduct(skuCode)
+                .map(sku -> new SkuInfoDto(
+                        sku.getSkuCode(),
+                        sku.getProduct().getName(),
+                        sku.getPrice(),
+                        sku.getProduct().getStatus()
+                ))
+                .orElseThrow(() -> new ResourceNotFoundException("SKU_NOT_FOUND", "SKU not found: " + skuCode));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<SkuInfoDto> getSkuInfos(Collection<String> skuCodes) {
+        if (skuCodes == null || skuCodes.isEmpty()) {
+            return List.of();
+        }
+        return productSkuRepository.findBySkuCodeInWithProduct(skuCodes).stream()
+                .map(sku -> new SkuInfoDto(
+                        sku.getSkuCode(),
+                        sku.getProduct().getName(),
+                        sku.getPrice(),
+                        sku.getProduct().getStatus()
+                ))
+                .toList();
     }
 
     private String toSlug(String input) {

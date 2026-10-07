@@ -1,3 +1,30 @@
+# ==========================================================================
+#  LUU Y HOSTNAME: Compose tu doc file .env de thay ${...}, ma .env dang de
+#  *_HOST=localhost cho moi truong chay local. Trong mang Docker, 'localhost'
+#  la chinh container do -> moi hostname/URL noi bo duoi day phai VIET CUNG
+#  bang TEN SERVICE (postgres, redis, rabbitmq, product-service...), khong
+#  dung ${POSTGRES_HOST}. Port noi bo cung co dinh (5432/6379/5672); cac bien
+#  *_PORT chi doi port map ra may host.
+# ==========================================================================
+
+# Cau hinh chung cho 6 Spring Boot service.
+x-spring-service: &spring-service
+  restart: unless-stopped
+  networks:
+    - ecommerce-network
+  deploy:
+    resources:
+      limits:
+        # 6 JVM khong gioi han se an het RAM may -> ~3GB cho 6 service.
+        memory: 512M
+
+# Heap = 70% gioi han container; SerialGC tiet kiem RAM cho container nho.
+x-java-env: &java-env
+  JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=70 -XX:+UseSerialGC"
+  POSTGRES_USER: ${POSTGRES_USER:-postgres}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-123456!}
+  JWT_SECRET: ${JWT_SECRET:-404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -58,6 +85,182 @@ services:
       start_period: 20s
     networks:
       - ecommerce-network
+
+  # ------------------------------------------------------------------------
+  #  Application services
+  #  Healthcheck: actuator tra 503 khi DOWN -> wget --spider exit != 0.
+  #  depends_on dung 'service_healthy' de doi Postgres/Redis/RabbitMQ that su
+  #  nhan ket noi; dang list chi doi container start -> Flyway chet ngay.
+  # ------------------------------------------------------------------------
+  identity-service:
+    <<: *spring-service
+    build:
+      context: .
+      dockerfile: identity-service/Dockerfile
+    container_name: ecommerce-identity-service
+    environment:
+      <<: *java-env
+      IDENTITY_DATASOURCE_URL: jdbc:postgresql://postgres:5432/identity_db
+      JWT_ACCESS_TOKEN_EXPIRATION: ${JWT_ACCESS_TOKEN_EXPIRATION:-900000}
+      JWT_REFRESH_TOKEN_EXPIRATION: ${JWT_REFRESH_TOKEN_EXPIRATION:-604800000}
+    ports:
+      - "${IDENTITY_PORT:-8081}:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8081/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  product-service:
+    <<: *spring-service
+    build:
+      context: .
+      dockerfile: product-service/Dockerfile
+    container_name: ecommerce-product-service
+    environment:
+      <<: *java-env
+      PRODUCT_DATASOURCE_URL: jdbc:postgresql://postgres:5432/product_db
+    ports:
+      - "${PRODUCT_PORT:-8082}:8082"
+      - "${PRODUCT_GRPC_PORT:-9082}:9082"   # gRPC — mo ra ngoai de test bang grpcurl
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8082/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  order-service:
+    <<: *spring-service
+    build:
+      context: .
+      dockerfile: order-service/Dockerfile
+    container_name: ecommerce-order-service
+    environment:
+      <<: *java-env
+      ORDER_DATASOURCE_URL: jdbc:postgresql://postgres:5432/order_db
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
+      PRODUCT_GRPC_HOST: product-service
+      PRODUCT_GRPC_PORT: 9082
+      # Feign client (product-client / identity-client)
+      PRODUCT_SERVICE_URL: http://product-service:8082
+      IDENTITY_SERVICE_URL: http://identity-service:8081
+    ports:
+      - "${ORDER_PORT:-8083}:8083"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      product-service:
+        condition: service_healthy
+      identity-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8083/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  payment-service:
+    <<: *spring-service
+    build:
+      context: .
+      dockerfile: payment-service/Dockerfile
+    container_name: ecommerce-payment-service
+    environment:
+      <<: *java-env
+      PAYMENT_DATASOURCE_URL: jdbc:postgresql://postgres:5432/payment_db
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
+    ports:
+      - "${PAYMENT_PORT:-8084}:8084"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8084/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  notification-service:
+    <<: *spring-service
+    build:
+      context: .
+      dockerfile: notification-service/Dockerfile
+    container_name: ecommerce-notification-service
+    environment:
+      <<: *java-env
+      NOTIFICATION_DATASOURCE_URL: jdbc:postgresql://postgres:5432/notification_db
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
+    ports:
+      - "${NOTIFICATION_PORT:-8085}:8085"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8085/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  api-gateway:
+    <<: *spring-service
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    container_name: ecommerce-api-gateway
+    environment:
+      <<: *java-env
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      IDENTITY_URI: http://identity-service:8081
+      PRODUCT_URI: http://product-service:8082
+      ORDER_URI: http://order-service:8083
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+      identity-service:
+        condition: service_healthy
+      product-service:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
 
 networks:
   ecommerce-network:

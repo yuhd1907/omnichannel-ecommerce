@@ -1,6 +1,11 @@
 spring:
   application:
     name: payment-service
+  autoconfigure:
+    # Chua co SecurityFilterChain rieng -> chain mac dinh (httpBasic + formLogin)
+    # dang bat; bo user in-memory de khong in mat khau ra log va khong ai dang nhap
+    # duoc bang user do. Ket qua: moi endpoint tru /actuator/health deu 401.
+    exclude: org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
   datasource:
     url: ${PAYMENT_DATASOURCE_URL:jdbc:postgresql://localhost:5432/payment_db}
     username: ${POSTGRES_USER:postgres}

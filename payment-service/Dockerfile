@@ -10,7 +10,9 @@
 # ==========================================================================
 
 # ---------- Stage 1: build ----------
-FROM eclipse-temurin:17-jdk-alpine AS builder
+# KHONG dung ban -alpine o stage build: protoc-gen-grpc-java (grpc-api) la
+# binary link glibc, Alpine dung musl -> "program not found or is not executable".
+FROM eclipse-temurin:17-jdk AS builder
 WORKDIR /workspace
 
 # Copy truoc phan khung Gradle va tai san Gradle distribution -> layer nay

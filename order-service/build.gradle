@@ -21,6 +21,10 @@ dependencies {
     // Feign client — gọi product-service và identity-service
     implementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
 
+    // gRPC client — gọi product-service qua gRPC (thay cho Feign N+1)
+    implementation project(':grpc-api')
+    implementation 'org.springframework.boot:spring-boot-starter-grpc-client'
+
     // Ngay 9 - Distributed lock chong Flash Sale race condition.
     // Redisson 4.7.0 ho tro Spring Boot 4.0.x/4.1.x va da bundle
     // redisson-spring-data-41, khong can exclude gi them.

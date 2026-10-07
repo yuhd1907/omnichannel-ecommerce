@@ -1,0 +1,50 @@
+# ==========================================================================
+#  Override cho moi truong PROD (VPS public). File goc docker-compose.yml giu
+#  nguyen cho local. Chay tren server:
+#     docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+#  Nguyen tac: api-gateway (8080) la cong DUY NHAT mo ra Internet.
+#   - 5 service ung dung: KHONG publish port. Van goi nhau qua ecommerce-network
+#     bang ten service; neu mo :8083 thi ai cung goi thang de bo qua JWT filter
+#     va rate limit cua gateway.
+#   - postgres/redis/rabbitmq: chi bind 127.0.0.1 -> phai SSH vao may moi
+#     truy cap duoc (vd: ssh -L 5432:127.0.0.1:5432 user@vps).
+#
+#  LUU Y: ufw KHONG chan duoc port Docker publish ra 0.0.0.0 - Docker tu ghi
+#  luat iptables (chain DOCKER) vuot qua ufw. Phai chan ngay tai day.
+#
+#  !override / !reset la BAT BUOC: mac dinh Compose GOP (append) list 'ports'
+#  cua file override vao file goc, khong thay the -> port cu van mo.
+# ==========================================================================
+
+services:
+  postgres:
+    ports: !override
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+
+  redis:
+    ports: !override
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+
+  rabbitmq:
+    ports: !override
+      - "127.0.0.1:${RABBITMQ_PORT:-5672}:5672"
+      - "127.0.0.1:${RABBITMQ_MGMT_PORT:-15672}:15672"
+
+  identity-service:
+    ports: !reset []
+
+  product-service:
+    # Bo ca 9082: grpcurl tren server thi chay qua 'docker exec' hoac SSH tunnel.
+    ports: !reset []
+
+  order-service:
+    ports: !reset []
+
+  payment-service:
+    ports: !reset []
+
+  notification-service:
+    ports: !reset []
+
+  # api-gateway: giu nguyen "${GATEWAY_PORT:-8080}:8080" tu file goc.

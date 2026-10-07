@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package ra.edu.grpc.product;
+
+option java_multiple_files = true;
+option java_package = "ra.edu.grpc.product";
+option java_outer_classname = "ProductInternalProto";
+
+service ProductInternalService {
+  rpc GetSku (GetSkuRequest) returns (SkuInfo);
+  rpc BatchGetSkus (BatchGetSkusRequest) returns (BatchGetSkusResponse);
+}
+
+message GetSkuRequest {
+  string sku_code = 1;
+}
+
+message BatchGetSkusRequest {
+  repeated string sku_codes = 1;
+}
+
+message SkuInfo {
+  string sku_code = 1;
+  string product_name = 2;
+  string price = 3;
+  string status = 4;
+}
+
+message BatchGetSkusResponse {
+  repeated SkuInfo skus = 1;
+  repeated string not_found = 2;
+}

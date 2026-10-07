@@ -23,6 +23,12 @@ Bản thống nhất cho Java + Spring Boot theo phạm vi **Identity, Product C
 
 **Order & Inventory triển khai chung một Spring Boot service và một PostgreSQL database.** Giữ hai nhóm package (`order` và `inventory`) trong service để tách mã nghiệp vụ; reserve/confirm/release là lời gọi nội bộ và dùng một transaction DB khi tạo/hủy/xác nhận đơn. Không có Inventory service riêng hay API reserve qua mạng. Gateway chỉ xác thực/định tuyến, không sở hữu nghiệp vụ.
 
+> **Bảo mật 2 lớp & hướng mở rộng Gateway:**
+> - *Gateway:* Xác thực JWT hợp lệ và còn hạn (chặn sớm, tiết kiệm tài nguyên cho service).
+> - *Service:* Kiểm tra phân quyền (Role) và quyền sở hữu tài nguyên (Ownership - ví dụ `ADDRESS_ACCESS_DENIED`), đảm bảo an toàn nếu service bị gọi trực tiếp.
+> - *Hướng mở rộng tương lai:* Gateway forward `X-User-Id`, `X-User-Roles` xuống downstream service để các service tin tưởng Gateway và loại bỏ bước verify token trùng lặp.
+
+
 `ProductSku` chứa thuộc tính và giá hiện tại; `OrderItem` giữ `sku_code`, `product_name`, `unit_price` và `subtotal` tại thời điểm đặt. `Inventory` chỉ giữ `sku_code` và số lượng. Không chia sẻ JPA entity giữa service.
 
 **Giao tiếp Order → Product:** chọn **gRPC** cho lời gọi đồng bộ lấy SKU, tên, giá và trạng thái ngay trước khi tạo đơn. Hợp đồng Protobuf là ranh giới giữa hai service; Order sao chép dữ liệu trả về vào `order_items`, không truy cập `product_db`. Đặt deadline cho lời gọi; nếu Product không phản hồi thì không tạo đơn. `ProductSkuCreated` vẫn là event bất đồng bộ để khởi tạo dòng `inventory`, không thay thế bước xác nhận giá lúc checkout.
@@ -137,6 +143,8 @@ Base path `/api/v1`; JWT cho người dùng, `ADMIN` cho quản trị. JSON `cam
 | Payment | `POST /webhooks/payments/{method}` | provider | raw body + chữ ký | `2xx` sau khi xác minh/lưu; lỗi chữ ký `400/401` |
 
 Khi `POST /orders`, Order service lấy `userId` từ JWT, đọc địa chỉ thuộc user từ Identity và SKU/giá/tên từ Product Catalog rồi **copy** sang đơn. Không tin giá, tổng tiền hoặc địa chỉ text do client tự gửi. **Client gửi `channel` trong request body**; Order service chỉ chấp nhận `WEB` hoặc `MOBILE` và trả `400 INVALID_CHANNEL` cho giá trị khác. Server không xác minh được client thực sự là website hay app: client có thể khai sai kênh; đây là giới hạn của MVP. Nếu SKU chưa được đồng bộ sang `inventory`, trả lỗi/ghi nhận để đồng bộ; không tự tạo dòng inventory với tồn tùy ý. API Order không có `locationId` hoặc `/internal/reservations`.
+
+*Ghi chú gRPC & REST internal (G02/G5):* Giao tiếp Order → Product ưu tiên qua gRPC (`ProductInternalService.BatchGetSkus`). REST endpoint `/internal/skus/{skuCode}` trên `product-service` vẫn được duy trì nhằm phục vụ debug bằng curl khi cần đối chiếu hiệu năng, và được bảo đảm không lộ qua API Gateway.
 
 **Mẫu request:**
 

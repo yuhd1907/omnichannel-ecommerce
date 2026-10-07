@@ -1,6 +1,10 @@
 spring:
   application:
     name: order-service
+  autoconfigure:
+    # Service chi verify JWT, khong tu xac thuc user -> bo user in-memory mac dinh
+    # (khong in "Using generated security password" ra log moi lan khoi dong).
+    exclude: org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
   datasource:
     url: ${ORDER_DATASOURCE_URL:jdbc:postgresql://localhost:5432/order_db}
     username: ${POSTGRES_USER:postgres}
@@ -17,11 +21,20 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      # Redis chi dung cho Redisson lock, khong co Redis repository -> tat de
+      # Spring Data Redis khong quet nham cac JPA repository (log "store assignment").
+      repositories:
+        enabled: false
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_DEFAULT_USER:guest}
     password: ${RABBITMQ_DEFAULT_PASS:guest}
+  grpc:
+    client:
+      channel:
+        product:
+          target: static://${PRODUCT_GRPC_HOST:localhost}:${PRODUCT_GRPC_PORT:9082}
 
 server:
   port: ${ORDER_PORT:8083}
@@ -46,7 +59,7 @@ app:
     lease-time-ms: 5000
 
 jwt:
-  secret: ${JWT_SECRET:my-very-secret-key-that-is-long-enough-for-hs256}
+  secret: ${JWT_SECRET:404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
 
 # URL các service nội bộ (override bằng env var khi deploy trên Docker/K8s)
 app-clients:

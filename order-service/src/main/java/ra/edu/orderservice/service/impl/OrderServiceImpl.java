@@ -179,22 +179,15 @@ public class OrderServiceImpl implements OrderService {
     }
 
     private Map<String, SkuInfo> fetchSkuInfos(Set<String> skuCodes) {
+        List<SkuInfo> skuInfos = productClient.getSkuInfos(new ArrayList<>(skuCodes));
         Map<String, SkuInfo> result = new HashMap<>();
+        for (SkuInfo sku : skuInfos) {
+            result.put(sku.skuCode(), sku);
+        }
         for (String skuCode : skuCodes) {
-            try {
-                ClientApiResponse<SkuInfo> response = productClient.getSkuInfo(skuCode);
-                if (response.data() == null) {
-                    throw new BusinessException("SKU_NOT_FOUND",
-                            "Product SKU not found: " + skuCode, HttpStatus.BAD_REQUEST);
-                }
-                result.put(skuCode, response.data());
-            } catch (FeignException.NotFound e) {
-                throw new BusinessException("SKU_NOT_FOUND",
+            if (!result.containsKey(skuCode)) {
+                throw new BusinessException("SKU_UNAVAILABLE",
                         "Product SKU not found: " + skuCode, HttpStatus.BAD_REQUEST);
-            } catch (FeignException e) {
-                log.error("product-service unavailable: {}", e.getMessage());
-                throw new BusinessException("PRODUCT_SERVICE_UNAVAILABLE",
-                        "Could not retrieve product info, please try again", HttpStatus.SERVICE_UNAVAILABLE);
             }
         }
         return result;
