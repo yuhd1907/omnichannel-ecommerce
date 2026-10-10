@@ -6,7 +6,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
+import ra.edu.common.response.ErrorCode;
 import ra.edu.orderservice.client.IdentityClient;
 import ra.edu.orderservice.client.ProductClient;
 import ra.edu.orderservice.client.dto.AddressInfo;
@@ -31,6 +36,7 @@ import ra.edu.orderservice.service.OrderService;
 
 import java.math.BigDecimal;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -45,12 +51,19 @@ public class OrderServiceImpl implements OrderService {
     private final OutboxEventRepository  outboxEventRepository;
     private final ProductClient          productClient;
     private final IdentityClient         identityClient;
+    private final TransactionTemplate    transactionTemplate;
+    private final RedissonClient         redissonClient;
+
+    @Value("${order.inventory-lock.enabled:true}")
+    private boolean lockEnabled = true;
+
+    @Value("${order.inventory-lock.wait-time-seconds:3}")
+    private long waitTimeSeconds = 3;
 
     @Override
-    @Transactional
     public OrderDto createOrder(UUID userId, CreateOrderRequest request) {
 
-        // ── 1. Validate channel ──────────────────────────────────────────────
+        // ── 1. Validate channel (ngoài transaction) ─────────────────────────
         String channel = request.channel().toUpperCase();
         if (!VALID_CHANNELS.contains(channel)) {
             throw new BusinessException(
@@ -59,7 +72,7 @@ public class OrderServiceImpl implements OrderService {
                     HttpStatus.BAD_REQUEST);
         }
 
-        // ── 2. Gọi Identity lấy địa chỉ + verify ownership ──────────────────
+        // ── 2. Gọi Identity lấy địa chỉ + verify ownership (HTTP - ngoài tx) ─
         AddressInfo address = fetchAddress(request.addressId(), userId);
 
         // ── 3. Gộp items trùng SKU, sắp xếp theo skuCode tránh deadlock ─────
@@ -70,10 +83,10 @@ public class OrderServiceImpl implements OrderService {
                         Long::sum,          // gộp quantity nếu trùng skuCode
                         TreeMap::new));     // TreeMap: sort lexicographic, cố định thứ tự
 
-        // ── 4. Gọi Product lấy thông tin từng SKU ───────────────────────────
+        // ── 4. Gọi Product lấy thông tin từng SKU (gRPC - ngoài tx) ─────────
         Map<String, SkuInfo> skuInfoMap = fetchSkuInfos(skuQuantityMap.keySet());
 
-        // ── 5. Build order + items (tính giá server-side) ────────────────────
+        // ── 5. Build order + items trong bộ nhớ (ngoài tx) ───────────────────
         String shippingAddress = buildShippingAddress(address);
 
         Order order = Order.builder()
@@ -116,38 +129,89 @@ public class OrderServiceImpl implements OrderService {
         order.setTotalAmount(totalAmount);
         order.setItems(items);
 
-        // ── 6. Persist order + items ─────────────────────────────────────────
-        Order savedOrder = orderRepository.save(order);
-
-        // ── 7. Reserve inventory: conditional UPDATE cho từng SKU ────────────
-        //    Thứ tự cố định (TreeMap) nên không deadlock dù nhiều transaction song song.
-        for (Map.Entry<String, Long> entry : skuQuantityMap.entrySet()) {
-            String skuCode  = entry.getKey();
-            long   quantity = entry.getValue();
-
-            int rowCount = inventoryRepository.reserve(skuCode, quantity);
-            if (rowCount == 0) {
-                // DB từ chối vì available_qty < quantity → rollback toàn bộ transaction
-                log.warn("Out of stock: sku={}, requested={}, orderId={}", skuCode, quantity, savedOrder.getId());
+        // ── 6. Lấy Redisson distributed lock cho mọi SKU theo thứ tự đã sort ──
+        RLock lock = null;
+        if (lockEnabled) {
+            lock = getLockForSkus(skuQuantityMap.keySet());
+            try {
+                // tryLock(waitTime, TimeUnit) không truyền leaseTime để kích hoạt Redisson Watchdog
+                boolean acquired = lock.tryLock(waitTimeSeconds, TimeUnit.SECONDS);
+                if (!acquired) {
+                    log.warn("Could not acquire inventory lock for skus={} within {}s", skuQuantityMap.keySet(), waitTimeSeconds);
+                    throw new BusinessException(
+                            ErrorCode.INVENTORY_BUSY,
+                            "Sản phẩm đang có nhiều người mua, vui lòng thử lại",
+                            HttpStatus.CONFLICT);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.error("Thread interrupted while acquiring inventory lock for skus={}", skuQuantityMap.keySet(), e);
                 throw new BusinessException(
-                        "OUT_OF_STOCK",
-                        "Insufficient inventory for SKU: " + skuCode,
+                        ErrorCode.INVENTORY_BUSY,
+                        "Sản phẩm đang có nhiều người mua, vui lòng thử lại",
                         HttpStatus.CONFLICT);
             }
         }
 
-        // ── 8. Ghi outbox event (cùng transaction) ───────────────────────────
-        String payload = buildOutboxPayload(savedOrder, skuQuantityMap);
-        OutboxEvent outbox = OutboxEvent.builder()
-                .aggregateType("Order")
-                .aggregateId(savedOrder.getId())
-                .eventType("ORDER_CREATED")
-                .payload(payload)
-                .build();
-        outboxEventRepository.save(outbox);
+        try {
+            // ── 7. Persist order + reserve inventory + outbox trong 1 Transaction ngắn ───
+            //    Dùng TransactionTemplate để ranh giới transaction nằm trọn vẹn SAU các cuộc
+            //    gọi mạng (HTTP/gRPC) và TRƯỚC khi nhả lock (tránh release lock trước khi commit).
+            Order savedOrder = transactionTemplate.execute(status -> {
+                Order persistedOrder = orderRepository.save(order);
 
-        log.info("Order created: id={}, userId={}, total={}", savedOrder.getId(), userId, totalAmount);
-        return toDto(savedOrder);
+                // Reserve inventory: conditional UPDATE cho từng SKU
+                for (Map.Entry<String, Long> entry : skuQuantityMap.entrySet()) {
+                    String skuCode  = entry.getKey();
+                    long   quantity = entry.getValue();
+
+                    int rowCount = inventoryRepository.reserve(skuCode, quantity);
+                    if (rowCount == 0) {
+                        // DB từ chối vì available_qty < quantity → rollback transaction
+                        log.warn("Out of stock: sku={}, requested={}, orderId={}", skuCode, quantity, persistedOrder.getId());
+                        throw new BusinessException(
+                                "OUT_OF_STOCK",
+                                "Insufficient inventory for SKU: " + skuCode,
+                                HttpStatus.CONFLICT);
+                    }
+                }
+
+                // Ghi outbox event (cùng transaction)
+                String payload = buildOutboxPayload(persistedOrder, skuQuantityMap);
+                OutboxEvent outbox = OutboxEvent.builder()
+                        .aggregateType("Order")
+                        .aggregateId(persistedOrder.getId())
+                        .eventType("ORDER_CREATED")
+                        .payload(payload)
+                        .build();
+                outboxEventRepository.save(outbox);
+
+                return persistedOrder;
+            });
+
+            log.info("Order created: id={}, userId={}, total={}", savedOrder.getId(), userId, totalAmount);
+            return toDto(savedOrder);
+        } finally {
+            // ── 8. Nhả lock trong finally sau khi transaction đã commit hoàn tất ──
+            if (lock != null && lock.isHeldByCurrentThread()) {
+                try {
+                    lock.unlock();
+                } catch (IllegalMonitorStateException e) {
+                    log.warn("Failed to unlock inventory lock: {}", e.getMessage());
+                }
+            }
+        }
+    }
+
+    private RLock getLockForSkus(Set<String> skuCodes) {
+        if (skuCodes == null || skuCodes.isEmpty()) {
+            return null;
+        }
+        RLock[] locks = skuCodes.stream()
+                .map(sku -> redissonClient.getLock("lock:inventory:" + sku))
+                .toArray(RLock[]::new);
+
+        return locks.length == 1 ? locks[0] : redissonClient.getMultiLock(locks);
     }
 
     // ─────────────────────────── private helpers ─────────────────────────────

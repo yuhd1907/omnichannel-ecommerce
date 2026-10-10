@@ -9,6 +9,12 @@ spring:
     url: ${ORDER_DATASOURCE_URL:jdbc:postgresql://localhost:5432/order_db}
     username: ${POSTGRES_USER:postgres}
     password: ${POSTGRES_PASSWORD:postgrespassword}
+    hikari:
+      maximum-pool-size: ${ORDER_HIKARI_MAX_POOL_SIZE:20}
+      minimum-idle: ${ORDER_HIKARI_MIN_IDLE:10}
+      connection-timeout: 5000
+      idle-timeout: 600000
+      max-lifetime: 1800000
   jpa:
     open-in-view: false
     hibernate:
@@ -30,6 +36,13 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_DEFAULT_USER:guest}
     password: ${RABBITMQ_DEFAULT_PASS:guest}
+    # OutboxRelay chi markSent khi broker ACK. Khong co confirm, send() thanh cong
+    # chi nghia la byte da roi socket -> broker sap ngay sau do thi mat event.
+    publisher-confirm-type: correlated
+    # mandatory: message khong vao duoc queue nao -> bi return thay vi bi drop im lang.
+    publisher-returns: true
+    template:
+      mandatory: true
   grpc:
     client:
       channel:
@@ -47,16 +60,23 @@ management:
   endpoint:
     health:
       show-details: always
+  health:
+    rabbit:
+      # Outbox de order-service van nhan don khi broker chet. Neu health phu thuoc
+      # Rabbit, Docker bao unhealthy dung luc service dang hoat dong nhu thiet ke.
+      enabled: false
 
 # Cau hinh nghiep vu rieng cua Order (dung o Ngay 6/9)
 app:
   inventory:
     # Thoi han giu hang cho don PENDING truoc khi job timeout nha kho.
     reservation-ttl-minutes: 15
-  lock:
-    # Redisson lock theo sku_code khi reserve (Ngay 9).
-    wait-time-ms: 3000
-    lease-time-ms: 5000
+
+# Redisson lock theo sku_code khi createOrder chong race condition
+order:
+  inventory-lock:
+    enabled: ${ORDER_INVENTORY_LOCK_ENABLED:true}
+    wait-time-seconds: ${ORDER_INVENTORY_LOCK_WAIT_TIME_SECONDS:3}
 
 jwt:
   secret: ${JWT_SECRET:404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
@@ -72,9 +92,9 @@ feign:
     config:
       product-client:
         url: ${PRODUCT_SERVICE_URL:http://localhost:8082}
-        connect-timeout: 2000   # ms
-        read-timeout: 3000      # ms
+        connect-timeout: 5000   # ms
+        read-timeout: 5000      # ms
       identity-client:
         url: ${IDENTITY_SERVICE_URL:http://localhost:8081}
-        connect-timeout: 2000
-        read-timeout: 3000
+        connect-timeout: 5000
+        read-timeout: 5000

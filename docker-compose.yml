@@ -157,6 +157,8 @@ services:
       # Feign client (product-client / identity-client)
       PRODUCT_SERVICE_URL: http://product-service:8082
       IDENTITY_SERVICE_URL: http://identity-service:8081
+      # Thi nghiem flash sale: $env:ORDER_INVENTORY_LOCK_ENABLED='false'; docker compose up -d order-service
+      ORDER_INVENTORY_LOCK_ENABLED: ${ORDER_INVENTORY_LOCK_ENABLED:-true}
     ports:
       - "${ORDER_PORT:-8083}:8083"
     depends_on:

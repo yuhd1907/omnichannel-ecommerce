@@ -21,6 +21,7 @@ public final class ErrorCode {
     public static final String INVALID_CHANNEL = "INVALID_CHANNEL";
     public static final String OUT_OF_STOCK = "OUT_OF_STOCK";
     public static final String SKU_UNAVAILABLE = "SKU_UNAVAILABLE";
+    public static final String INVENTORY_BUSY = "INVENTORY_BUSY";
     public static final String ORDER_NOT_CANCELLABLE = "ORDER_NOT_CANCELLABLE";
     public static final String INVALID_STATUS_TRANSITION = "INVALID_STATUS_TRANSITION";
 
