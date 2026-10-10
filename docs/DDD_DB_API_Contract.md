@@ -207,6 +207,22 @@ Error: dùng mã HTTP thực (`400`, `401`, `403`, `404`, `409`, `422`, `429`, `
 
 **Race và giới hạn MVP:** timeout/hủy có thể thắng trước webhook thành công. Khi tiền đã thu mà đơn đã `CANCELLED` và hàng đã nhả, **không tự xác nhận đơn**. Ghi log/cảnh báo cho admin đối soát và xử lý hoàn tiền thủ công ngoài phạm vi MVP. Không được âm thầm đánh dấu `PAID` rồi bỏ qua hàng. Cần thiết kế hoàn tiền tự động ở giai đoạn sau. Vì thiếu bảng idempotency key của Order, retry `POST /orders` từ client có thể tạo đơn khác; nâng cấp thêm `Idempotency-Key` + unique storage trước khi mở bán thực tế.
 
+**Ranh giới Transaction & Cấu hình Connection Pool (HikariCP):**
+- **Thu hẹp ranh giới Transaction bằng `TransactionTemplate`:** Bỏ `@Transactional` ở mức method `createOrder`. Toàn bộ I/O mạng gồm Feign HTTP (`fetchAddress`) và gRPC (`fetchSkuInfos`), validate dữ liệu, sắp xếp TreeMap và khởi tạo object trong RAM được thực hiện **bên ngoài transaction**. Chỉ bọc đúng bước thao tác DB (`orderRepository.save`, reserve inventory và `outboxEventRepository.save`) trong `transactionTemplate.execute(...)`. Điều này giải quyết 2 vấn đề chí mạng:
+  1. Tránh giữ connection DB trong thời gian chờ mạng (giảm thời gian giữ connection từ vài trăm ms xuống < 5ms), loại bỏ hoàn toàn lỗi cạn kiệt connection pool (`Connection is not available, request timed out`) khi Flash Sale.
+  2. Đảm bảo transaction commit xong hoàn toàn TRƯỚC khi nhả distributed lock (tránh lỗi kinh điển release lock trong `finally` trước khi `@Transactional` proxy commit).
+- **Cấu hình `spring.datasource.hikari.maximum-pool-size: 20`:**
+  - Áp dụng công thức chuẩn HikariCP: `pool_size = (cpu_cores * 2) + effective_spindle_count`. Với container 1-2 vCPU và SSD, dải 10-20 connection là tối ưu.
+  - Khi transaction DB siêu ngắn (< 5ms), pool size = 20 cho phép Order Service phục vụ hàng nghìn TPS mà không gây nghẽn connection, đồng thời tránh lãng phí RAM và quá tải context switching trên PostgreSQL.
+
+**Quy ước Redisson Distributed Lock (Chống Race Condition Flash Sale):**
+- **Key Format:** `lock:inventory:{skuCode}` (có tiền tố rõ ràng để `redis-cli --scan` lọc dễ dàng khi giám sát/demo).
+- **MultiLock & Chống Deadlock:** Đối với đơn hàng nhiều SKU, các `RLock` được tạo theo thứ tự SKU đã sort tăng dần trong `TreeMap`, sau đó gộp lại bằng `redissonClient.getMultiLock(locks)`. Việc sắp xếp thứ tự cố định loại bỏ hoàn toàn khả năng deadlock giữa 2 request cạnh tranh các tập SKU đảo nhau `[A, B]` và `[B, A]`.
+- **TryLock & Redisson Watchdog:** Gọi `lock.tryLock(3, TimeUnit.SECONDS)` mà **không truyền `leaseTime`**. Điều này kích hoạt cơ chế Watchdog của Redisson tự động gia hạn lock khi thread còn sống và tự hết hạn sau 30s nếu JVM chết đột ngột; tránh lock hết hạn giữa chừng nếu transaction DB kéo dài. Quá 3s không lấy được lock sẽ fail-fast trả `409 INVENTORY_BUSY` ("Sản phẩm đang có nhiều người mua, vui lòng thử lại").
+- **Nhả Lock an toàn:** Lock chỉ được nhả trong khối `finally` sau khi transaction DB đã commit xong (`TransactionTemplate`), và chỉ gọi khi `lock.isHeldByCurrentThread()` để tránh lỗi `IllegalMonitorStateException`.
+- **Cờ cấu hình `order.inventory-lock.enabled` (mặc định `true`):** Hỗ trợ bật/tắt distributed lock để chạy benchmark đối chứng hiệu năng và tỉ lệ tranh chấp.
+- **Phạm vi áp dụng:** Chỉ áp dụng lock cho đường `createOrder` (reserve inventory). Các luồng `cancelOrder` (release kho) và `confirmOrder` (trừ kho sau thanh toán) **không cần lock**: chúng chỉ hoàn trả/trừ số lượng theo snapshot của đơn hàng đã chốt, không thể gây bán vượt quá tồn kho (overselling), và câu lệnh conditional UPDATE `CHECK (available_qty >= 0)` đã bảo đảm tính toàn vẹn ở tầng DB.
+
 **Outbox:** transaction nghiệp vụ ghi event vào bảng; worker đọc `PENDING`, publish, tăng `retry_count` khi lỗi và đặt `SENT/published_at` sau xác nhận broker. Consumer có thể nhận trùng nên phải dùng chuyển trạng thái có điều kiện; Notification dùng unique `(source_event_id,recipient)`. Product sẽ thêm outbox khi thực hiện `ProductSkuCreated` ở Ngày 10. Event không chứa dữ liệu cá nhân không cần thiết.
 
 Event tối thiểu gồm `eventId`, `eventType`, `eventVersion`, `aggregateId`, `occurredAt`, `traceId`, `payload`. Event MVP: `ProductSkuCreated`, `OrderCreated`, `OrderConfirmed`, `OrderCancelled`, `PaymentSucceeded`, `PaymentFailed`. `OrderCreated` không có nghĩa đã thanh toán.

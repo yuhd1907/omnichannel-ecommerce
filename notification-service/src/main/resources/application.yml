@@ -13,9 +13,9 @@ spring:
   jpa:
     open-in-view: false
     hibernate:
-      ddl-auto: none
+      ddl-auto: validate
   flyway:
-    enabled: false
+    enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
   rabbitmq:
@@ -23,6 +23,18 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_DEFAULT_USER:guest}
     password: ${RABBITMQ_DEFAULT_PASS:guest}
+    listener:
+      simple:
+        # Het retry -> reject khong requeue -> DLX -> DLQ. Khong requeue vo han.
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          # Boot 4 dung 'max-retries' (so lan thu LAI), KHONG con 'max-attempts'
+          # (key sai bi bo qua im lang). 2 lan thu lai = tong 3 lan xu ly.
+          max-retries: 2
+          initial-interval: 1s
+          multiplier: 2
+          max-interval: 5s
 
 server:
   port: ${NOTIFICATION_PORT:8085}

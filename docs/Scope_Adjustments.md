@@ -93,7 +93,7 @@ Các điều chỉnh trên chỉ cắt *thành phần*, không cắt *kiến tr�
 - Microservices với **database per service** (5 database trên PostgreSQL); các service không đọc database của nhau.
 - **API Gateway** là cửa vào duy nhất: xác thực JWT (`JwtAuthGlobalFilter`) và giới hạn tần suất bằng Redis (`RequestRateLimiter`, theo user hoặc IP). Cấu hình prod chỉ mở cổng 8080 ra ngoài.
 - **gRPC** cho lời gọi đồng bộ Order → Product (lấy SKU/giá lúc checkout); **REST/Feign** cho Order → Identity (địa chỉ giao hàng).
-- Giữ hàng nguyên tử, chống bán vượt kho bằng cập nhật có điều kiện + ràng buộc CHECK.
+- Giữ hàng nguyên tử, chống bán vượt kho bằng cập nhật có điều kiện + ràng buộc CHECK; khóa phân tán Redisson theo `sku_code` trước transaction để giảm tranh chấp khi nhiều người mua cùng SKU.
 - Phân quyền `USER`/`ADMIN` ở từng service, bên cạnh lớp xác thực ở gateway.
 
-Phần còn đang làm theo kế hoạch: outbox + RabbitMQ (event giữa Order, Payment, Notification), khóa phân tán Redisson theo `sku_code`, job hủy đơn quá hạn giữ hàng, Payment và Notification.
+Phần còn đang làm theo kế hoạch: publish outbox lên RabbitMQ (Order đã ghi event vào bảng `outbox_events`, chưa có worker gửi đi), consumer ở Payment/Notification, job hủy đơn quá hạn giữ hàng, Payment và Notification.

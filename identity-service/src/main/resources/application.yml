@@ -5,6 +5,10 @@ spring:
     url: ${IDENTITY_DATASOURCE_URL:jdbc:postgresql://localhost:5432/identity_db}
     username: ${POSTGRES_USER:postgres}
     password: ${POSTGRES_PASSWORD:postgrespassword}
+    hikari:
+      maximum-pool-size: ${IDENTITY_HIKARI_MAX_POOL_SIZE:20}
+      minimum-idle: ${IDENTITY_HIKARI_MIN_IDLE:10}
+      connection-timeout: 5000
   jpa:
     open-in-view: false
     hibernate:

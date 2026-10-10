@@ -1,0 +1,73 @@
+// Nguon cua docs/rabbitmq-topology.png. Render lai (tu thu muc goc repo):
+//   docker run --rm -v "${PWD}/docs:/d" -w /d alpine:3.20 sh -c \
+//     "apk add -q graphviz ttf-dejavu && dot -Tpng -Gdpi=150 rabbitmq-topology.dot -o rabbitmq-topology.png"
+
+digraph rabbitmq_topology {
+  graph [rankdir=LR, fontname="DejaVu Sans", nodesep=0.35, ranksep=0.9, pad=0.3, bgcolor="white",
+         label=<<b>RabbitMQ topology</b>  <font point-size="10">— exchange (topic) → queue → consumer; mỗi queue có DLX/DLQ riêng</font>>,
+         labelloc=t, fontsize=16];
+  node  [fontname="DejaVu Sans", fontsize=10.5, style="rounded,filled", penwidth=1.3, margin="0.15,0.08"];
+  edge  [fontname="DejaVu Sans", fontsize=9, penwidth=1.5, arrowsize=0.75];
+
+  // ---- Publisher ----
+  node [shape=box, fillcolor="#F8FAFC", color="#334155"];
+  pub_order   [label=<<b>order-service</b><br/><font point-size="8.5">outbox relay</font>>];
+  pub_product [label=<<b>product-service</b><br/><font point-size="8.5">outbox relay</font>>];
+
+  // ---- Exchange (topic) ----
+  node [shape=hexagon, fillcolor="#FFEDD5", color="#C2410C", style="filled"];
+  ex_order   [label=<<b>order.events</b><br/><font point-size="8.5">topic · durable</font>>];
+  ex_product [label=<<b>product.events</b><br/><font point-size="8.5">topic · durable</font>>];
+
+  // ---- Queue ----
+  node [shape=box, style="rounded,filled", fillcolor="#DCFCE7", color="#15803D"];
+  q_notif   [label=<<b>notification.order-events</b><br/><font point-size="8.5">durable · có DLX riêng</font>>];
+  q_payment [label=<<b>payment.order-created</b><br/><font point-size="8.5">durable · có DLX riêng</font>>,
+             style="rounded,dashed,filled"];
+  q_sku     [label=<<b>order.product-sku-created</b><br/><font point-size="8.5">durable · có DLX riêng</font>>];
+
+  // ---- DLX (fanout) + DLQ ----
+  node [shape=hexagon, style="filled", fillcolor="#FEE2E2", color="#B91C1C", fontsize=9];
+  dlx_notif   [label="notification.order-events.dlx\nfanout"];
+  dlx_payment [label="payment.order-created.dlx\nfanout", style="dashed,filled"];
+  dlx_sku     [label="order.product-sku-created.dlx\nfanout"];
+  node [shape=box, style="rounded,filled", fillcolor="#FEF2F2", color="#B91C1C", fontsize=9];
+  dlq_notif   [label="notification.order-events.dlq"];
+  dlq_payment [label="payment.order-created.dlq", style="rounded,dashed,filled"];
+  dlq_sku     [label="order.product-sku-created.dlq"];
+
+  // ---- Consumer ----
+  node [shape=box, style="rounded,filled", fillcolor="#F8FAFC", color="#334155", fontsize=10.5];
+  c_notif   [label=<<b>notification-service</b><br/><font point-size="8.5">gửi email giả lập + log</font>>];
+  c_payment [label=<<b>payment-service</b><br/><font point-size="8.5">tạo payment — Ngày 11</font>>,
+             style="rounded,dashed,filled", fontcolor="#64748B", color="#94A3B8"];
+  c_sku     [label=<<b>order-service</b><br/><font point-size="8.5">INSERT inventory nếu chưa có</font>>];
+
+  // ---- Luong chinh ----
+  edge [color="#334155"];
+  pub_order   -> ex_order   [label="publish"];
+  pub_product -> ex_product [label="publish"];
+
+  edge [color="#C2410C", fontcolor="#9A3412"];
+  ex_order   -> q_notif   [label="order.created\norder.cancelled"];
+  ex_order   -> q_payment [label="order.created", style=dashed];
+  ex_product -> q_sku     [label="product.sku.created"];
+
+  edge [color="#15803D", fontcolor="#166534"];
+  q_notif   -> c_notif   [label="consume"];
+  q_payment -> c_payment [label="consume", style=dashed];
+  q_sku     -> c_sku     [label="consume"];
+
+  // ---- Dead letter ----
+  edge [color="#B91C1C", fontcolor="#991B1B", style=dashed];
+  q_notif   -> dlx_notif   [label="reject sau\n3 lần thử"];
+  q_payment -> dlx_payment [label="reject sau\n3 lần thử"];
+  q_sku     -> dlx_sku     [label="reject sau\n3 lần thử"];
+  edge [style=solid, label=""];
+  dlx_notif   -> dlq_notif;
+  dlx_payment -> dlq_payment [style=dashed];
+  dlx_sku     -> dlq_sku;
+
+  { rank=same; q_notif; q_payment; q_sku; }
+  { rank=same; dlx_notif; dlx_payment; dlx_sku; c_notif; c_payment; c_sku; }
+}

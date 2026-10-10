@@ -48,7 +48,7 @@ RequestRateLimiter — token bucket theo user / IP</font>>,
     postgres [label=<<b>PostgreSQL 16</b> — database per service<br/>
 <font point-size="9">identity_db · product_db · order_db · payment_db · notification_db</font>>,
               shape=cylinder, fillcolor="#E0F2FE", color="#0369A1"];
-    redis    [label=<<b>Redis 7</b><br/><font point-size="9">rate-limit tokens<br/>Redisson lock (kế hoạch)</font>>,
+    redis    [label=<<b>Redis 7</b><br/><font point-size="9">rate-limit tokens<br/>Redisson lock theo sku_code</font>>,
               shape=cylinder, fillcolor="#FEE2E2", color="#B91C1C"];
     rabbitmq [label=<<b>RabbitMQ 3.13</b><br/><font point-size="9">event bus (kế hoạch)</font>>,
               style="rounded,dashed,filled", fillcolor="#DCFCE7", color="#15803D"];
@@ -84,5 +84,5 @@ RequestRateLimiter — token bucket theo user / IP</font>>,
   identity -> postgres; order -> postgres; product -> postgres;
   payment -> postgres [style=dashed]; notification -> postgres [style=dashed];
   gateway -> redis [xlabel="token bucket"];
-  order   -> redis [xlabel="lock sku_code", style=dashed];
+  order   -> redis [xlabel="lock sku_code"];
 }

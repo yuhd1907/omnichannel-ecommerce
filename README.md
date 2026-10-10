@@ -13,6 +13,9 @@ Hệ thống thương mại điện tử đa kênh (Web / Mobile) theo kiến tr
 | [docs/DDD_DB_API_Contract.md](docs/DDD_DB_API_Contract.md) | Bounded context, schema từng database, API contract v1, luồng checkout và giữ hàng |
 | [docs/Scope_Adjustments.md](docs/Scope_Adjustments.md) | Đối chiếu với đề bài và lý do điều chỉnh phạm vi |
 | [docs/architecture.png](docs/architecture.png) | Sơ đồ kiến trúc (nguồn: [docs/architecture.dot](docs/architecture.dot)) |
+| [docs/Messaging_Topology.md](docs/Messaging_Topology.md) | RabbitMQ topology, DLQ, Outbox relay, consumer idempotent, hạn chế đã biết |
+| [docs/deployment-notes.md](docs/deployment-notes.md) | Thao tác vận hành: gửi lại outbox `FAILED`, xử lý DLQ |
+| [docs/Flashsale_Results.md](docs/Flashsale_Results.md) | Thử nghiệm flash sale bằng k6 (100 người / 10 sản phẩm): cách chạy và kết quả |
 | [docs/erd/](docs/erd/) | ERD của từng database |
 
 ## Công nghệ
@@ -24,7 +27,7 @@ Hệ thống thương mại điện tử đa kênh (Web / Mobile) theo kiến tr
 | Giao tiếp đồng bộ | REST (JSON), OpenFeign, **gRPC** (Protobuf, grpc-java 1.68.1) |
 | Giao tiếp bất đồng bộ | RabbitMQ 3.13 + Transactional Outbox *(đang triển khai)* |
 | Database | PostgreSQL 16, Flyway migration — database per service |
-| Cache / lock | Redis 7, Redisson *(lock đang triển khai)* |
+| Cache / lock | Redis 7, Redisson (khóa phân tán theo `sku_code` khi giữ hàng) |
 | Bảo mật | JWT (HS512, jjwt 0.13), RBAC `USER` / `ADMIN` |
 | Đóng gói | Docker multi-stage build, Docker Compose |
 
@@ -107,8 +110,8 @@ docker compose up -d --wait postgres redis rabbitmq
 | --- | --- | --- |
 | PostgreSQL | `localhost:5432` | user `postgres`, mật khẩu `POSTGRES_PASSWORD` trong `.env` (mẫu: `postgrespassword`; không có `.env` thì là `123456!`) |
 | Redis | `localhost:6379` | không mật khẩu |
-| RabbitMQ (AMQP) | `localhost:5672` | `guest` / `guest` |
-| RabbitMQ Management UI | http://localhost:15672 | `guest` / `guest` |
+| RabbitMQ (AMQP) | `localhost:5672` | `RABBITMQ_DEFAULT_USER` / `RABBITMQ_DEFAULT_PASS` trong `.env` (không có `.env` thì `guest` / `guest`) |
+| RabbitMQ Management UI | http://localhost:15672 | như trên |
 
 Repo **không** kèm pgAdmin. Có thể dùng DBeaver hay một client bất kỳ với thông tin trên, hoặc dùng `psql` ngay trong container:
 
