@@ -1,5 +1,7 @@
 # Omnichannel E-Commerce
 
+[![CI](https://github.com/yuhd1907/omnichannel-ecommerce/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/yuhd1907/omnichannel-ecommerce/actions/workflows/ci.yml)
+
 Hệ thống thương mại điện tử đa kênh (Web / Mobile) theo kiến trúc **microservices**, viết bằng Java 17 + Spring Boot 4. Mỗi bounded context là một service với database riêng; client chỉ đi qua API Gateway.
 
 > **Hạn nộp: 15/10/2026** (đã lùi từ 08/10).
