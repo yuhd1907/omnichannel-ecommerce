@@ -159,6 +159,8 @@ services:
       IDENTITY_SERVICE_URL: http://identity-service:8081
       # Thi nghiem flash sale: $env:ORDER_INVENTORY_LOCK_ENABLED='false'; docker compose up -d order-service
       ORDER_INVENTORY_LOCK_ENABLED: ${ORDER_INVENTORY_LOCK_ENABLED:-true}
+      ORDER_RESERVATION_TTL_MINUTES: ${ORDER_RESERVATION_TTL_MINUTES:-15}
+      ORDER_EXPIRY_CHECK_INTERVAL_MS: ${ORDER_EXPIRY_CHECK_INTERVAL_MS:-60000}
     ports:
       - "${ORDER_PORT:-8083}:8083"
     depends_on:

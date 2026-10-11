@@ -9,10 +9,19 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import ra.edu.orderservice.entity.Order;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 public interface OrderRepository extends JpaRepository<Order, UUID> {
+
+    @Query("""
+            SELECT o.id FROM Order o
+            WHERE o.status = 'PENDING' AND o.createdAt < :cutoff
+            ORDER BY o.createdAt
+            """)
+    List<UUID> findExpiredPendingIds(@Param("cutoff") Instant cutoff, Pageable pageable);
 
     /** Danh sách đơn của một user, dùng index idx_orders_user_created_at. */
     Page<Order> findByUserId(UUID userId, Pageable pageable);

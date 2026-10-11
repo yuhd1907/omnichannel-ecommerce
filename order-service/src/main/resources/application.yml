@@ -78,11 +78,10 @@ management:
       # Rabbit, Docker bao unhealthy dung luc service dang hoat dong nhu thiet ke.
       enabled: false
 
-# Cau hinh nghiep vu rieng cua Order (dung o Ngay 6/9)
 app:
   inventory:
-    # Thoi han giu hang cho don PENDING truoc khi job timeout nha kho.
-    reservation-ttl-minutes: 15
+    reservation-ttl-minutes: ${ORDER_RESERVATION_TTL_MINUTES:15}
+    expiry-check-interval-ms: ${ORDER_EXPIRY_CHECK_INTERVAL_MS:60000}
 
 # Redisson lock theo sku_code khi createOrder chong race condition
 order:
