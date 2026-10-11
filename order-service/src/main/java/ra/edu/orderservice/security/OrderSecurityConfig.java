@@ -43,6 +43,10 @@ public class OrderSecurityConfig {
                         .authenticationEntryPoint(new JwtAuthenticationEntryPoint())
                         .accessDeniedHandler(new JwtAccessDeniedHandler()))
                 .authorizeHttpRequests(auth -> auth
+                        // Loi chua bat o MVC duoc forward toi /error (ERROR dispatch, khong con JWT
+                        // context); chan /error thi moi loi bi bien thanh 401. Khong bat
+                        // server.error.include-stacktrace o production.
+                        .requestMatchers("/error").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated()

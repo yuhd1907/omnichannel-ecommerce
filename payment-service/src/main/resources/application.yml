@@ -15,7 +15,7 @@ spring:
     hibernate:
       ddl-auto: none
   flyway:
-    enabled: false
+    enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
   rabbitmq:
@@ -23,6 +23,21 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_DEFAULT_USER:guest}
     password: ${RABBITMQ_DEFAULT_PASS:guest}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
+    listener:
+      simple:
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          # Boot 4 dung 'max-retries' (so lan thu LAI), KHONG con 'max-attempts'
+          # (key sai bi bo qua im lang -> mac dinh 3 lan thu lai = 4 lan). 2 = tong 3 lan.
+          max-retries: 2
+          initial-interval: 1s
+          multiplier: 2
+          max-interval: 5s
 
 server:
   port: ${PAYMENT_PORT:8084}
@@ -35,3 +50,13 @@ management:
   endpoint:
     health:
       show-details: always
+  health:
+    rabbit:
+      enabled: false
+
+jwt:
+  secret: ${JWT_SECRET:404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
+
+app:
+  payment:
+    webhook-secret: ${PAYMENT_WEBHOOK_SECRET:dev-webhook-secret-key-12345}

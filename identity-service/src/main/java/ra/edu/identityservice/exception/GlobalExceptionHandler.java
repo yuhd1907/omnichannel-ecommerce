@@ -9,9 +9,11 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.validation.ObjectError;
+import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 import ra.edu.common.response.ApiError;
 import ra.edu.common.response.ErrorCode;
 import ra.edu.common.response.FieldIssue;
@@ -98,12 +100,27 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * URL khong khop controller nao (404 NOT_FOUND). Khong co handler nay thi fallback
+     * ben duoi bien 404 thanh 500.
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiError> handleNoResource(NoResourceFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiError.of(ErrorCode.NOT_FOUND, "Không tìm thấy đường dẫn: /" + ex.getResourcePath()));
+    }
+
+    /**
      * Fallback xu ly tat ca cac ngoai le chua bat (500 INTERNAL_ERROR).
      * Ghi log day du stack trace vao file log server, TUYET DOI KHONG de lo stack trace
      * hay cau truc truy van SQL ra HTTP response.
      */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleGeneralException(Exception ex) {
+        // Loi chuan cua Spring MVC (405, 415, thieu param...) da mang san HTTP status -> giu nguyen.
+        if (ex instanceof ErrorResponse er) {
+            return ResponseEntity.status(er.getStatusCode()).headers(er.getHeaders())
+                    .body(ApiError.of(ErrorCode.forStatus(er.getStatusCode().value()), ex.getMessage()));
+        }
         log.error("Unhandled internal server error: ", ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ApiError.of(ErrorCode.INTERNAL_ERROR, "Đã xảy ra lỗi hệ thống, vui lòng thử lại sau"));

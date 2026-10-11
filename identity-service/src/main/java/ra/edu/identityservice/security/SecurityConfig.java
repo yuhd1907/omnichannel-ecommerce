@@ -37,6 +37,10 @@ public class SecurityConfig {
                         .accessDeniedHandler(new JwtAccessDeniedHandler())
                 )
                 .authorizeHttpRequests(auth -> auth
+                        // Loi chua bat o MVC duoc forward toi /error (ERROR dispatch, khong con JWT
+                        // context); chan /error thi moi loi bi bien thanh 401. Khong bat
+                        // server.error.include-stacktrace o production.
+                        .requestMatchers("/error").permitAll()
                         .requestMatchers("/api/v1/auth/**").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
                         // Internal endpoint cho service-to-service (không expose qua Gateway)

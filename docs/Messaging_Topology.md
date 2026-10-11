@@ -8,11 +8,13 @@ Thiết kế giao tiếp bất đồng bộ giữa các service. Bối cảnh t�
 
 ## 1. Bảng topology
 
-| Exchange (topic) | Routing key | Queue | Consumer | Trạng thái |
-| --- | --- | --- | --- | --- |
-| `order.events` | `order.created`, `order.cancelled` | `notification.order-events` | notification-service | ✅ |
-| `order.events` | `order.created` | `payment.order-created` | payment-service | Ngày 11 |
-| `product.events` | `product.sku.created` | `order.product-sku-created` | order-service | Kế hoạch |
+| Exchange (topic) | Routing key | Queue | DLX → DLQ | Consumer | Trạng thái |
+| --- | --- | --- | --- | --- | --- |
+| `order.events` | `order.created`, `order.cancelled` | `notification.order-events` | `notification.order-events.dlx` → `.dlq` | notification-service | ✅ |
+| `order.events` | `order.created`, `order.cancelled` | `payment.order-events` | `payment.order-events.dlx` → `.dlq` | payment-service | Đang làm |
+| `payment.events` *(mới)* | `payment.succeeded`, `payment.failed` | `order.payment-events` | `order.payment-events.dlx` → `.dlq` | order-service *(làm sau)* | Kế hoạch |
+| `order.events` | `order.confirmed` *(mới)* | `notification.order-events` | *(đã có)* | notification-service *(làm sau)* | Kế hoạch |
+| `product.events` | `product.sku.created` | `order.product-sku-created` | `order.product-sku-created.dlx` → `.dlq` | order-service | Kế hoạch |
 
 **Quy ước đặt tên**
 
@@ -27,16 +29,16 @@ Thiết kế giao tiếp bất đồng bộ giữa các service. Bối cảnh t�
 
 | Service | Khai báo | Ghi chú |
 | --- | --- | --- |
-| order-service | exchange `order.events` | bên phát |
-| notification-service | exchange `order.events`, queue + 2 binding, DLX + DLQ | khai báo lặp exchange để binding không lỗi khi khởi động trước bên phát |
-| payment-service (Ngày 11) | exchange `order.events`, queue `payment.order-created` + binding, DLX + DLQ | |
+| order-service | exchange `order.events`; (làm sau: exchange `payment.events`, queue `order.payment-events` + binding, DLX + DLQ) | bên phát `order.events`, bên nhận `payment.events` |
+| notification-service | exchange `order.events`, queue `notification.order-events` + binding (thêm `order.confirmed` làm sau), DLX + DLQ | khai báo lặp exchange để binding không lỗi khi khởi động trước bên phát |
+| payment-service | exchange `order.events`, queue `payment.order-events` + binding (`order.created`, `order.cancelled`), DLX + DLQ; exchange `payment.events` | bên nhận `order.events`, bên phát `payment.events` |
 | product-service (kế hoạch) | exchange `product.events` | cần thêm `spring-boot-starter-amqp` + biến môi trường Rabbit trong compose |
 
 Khai báo trùng một exchange ở cả hai bên là an toàn, vì RabbitMQ chấp nhận khai báo lặp nếu tham số giống nhau (`topic`, `durable=true`, `auto_delete=false`).
 
 **Tham số queue không sửa được sau khi tạo.** Muốn thêm `x-dead-letter-exchange` cho một queue đã tồn tại thì lần khai báo sau sẽ lỗi `PRECONDITION_FAILED` và service không khởi động được. Cách duy nhất là xóa queue (mất message đang chờ) rồi khai báo lại. Vì vậy mọi queue đều có DLX ngay từ đầu.
 
-**Chưa khai báo `payment.order-created`.** Theo nguyên tắc "bên nhận khai báo queue", queue này do payment-service tạo khi có consumer ở Ngày 11. Nếu tạo sớm, mọi `order.created` từ bây giờ sẽ dồn trong queue, và payment-service sẽ xử lý cả các đơn test cũ khi bật lên. Muốn tạo sớm để không lỡ event thì phải purge queue trước khi bật consumer.
+**Khai báo `payment.order-events`.** Theo nguyên tắc "bên nhận khai báo queue", queue này do payment-service tạo khi cấu hình consumer. Mỗi queue đều được gắn kèm DLX (`payment.order-events.dlx`) và DLQ (`payment.order-events.dlq`).
 
 ## 3. Dead letter
 

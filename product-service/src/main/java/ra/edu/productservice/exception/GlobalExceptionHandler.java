@@ -3,10 +3,13 @@ package ra.edu.productservice.exception;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 import ra.edu.common.response.ApiError;
 import ra.edu.common.response.ErrorCode;
 import ra.edu.common.response.FieldIssue;
@@ -49,8 +52,28 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
     }
 
+    /** URL không khớp controller nào. Không có handler này thì catch-all bên dưới biến 404 thành 500. */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiError> handleNoResource(NoResourceFoundException ex) {
+        ApiError error = ApiError.of(ErrorCode.NOT_FOUND, "Resource not found: /" + ex.getResourcePath());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /** JSON sai cú pháp / sai kiểu — không phải ErrorResponse nên phải bắt riêng, nếu không thành 500. */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiError> handleNotReadable(HttpMessageNotReadableException ex) {
+        log.warn("Malformed request body: {}", ex.getMessage());
+        ApiError error = ApiError.of(ErrorCode.VALIDATION_FAILED, "Malformed JSON request body");
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleGeneralException(Exception ex) {
+        // Lỗi chuẩn của Spring MVC (405, 415, thiếu param...) đã mang sẵn HTTP status -> giữ nguyên.
+        if (ex instanceof ErrorResponse er) {
+            ApiError error = ApiError.of(ErrorCode.forStatus(er.getStatusCode().value()), ex.getMessage());
+            return ResponseEntity.status(er.getStatusCode()).headers(er.getHeaders()).body(error);
+        }
         log.error("Unhandled exception occurred", ex);
         ApiError error = ApiError.of(ErrorCode.INTERNAL_ERROR, "An internal server error occurred");
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
