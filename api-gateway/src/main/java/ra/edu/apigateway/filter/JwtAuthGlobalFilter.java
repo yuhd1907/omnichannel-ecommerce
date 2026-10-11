@@ -90,6 +90,11 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
             }
         }
 
+        // 4. Webhook từ cổng thanh toán — xác thực bằng signature, không cần JWT
+        if (path.startsWith("/api/v1/webhooks/")) {
+            return true;
+        }
+
         return false;
     }
 

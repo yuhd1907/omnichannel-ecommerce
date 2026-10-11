@@ -32,6 +32,7 @@ public final class ErrorCode {
     public static final String PAYMENT_ACCESS_DENIED = "PAYMENT_ACCESS_DENIED";
     public static final String INVALID_SIGNATURE = "INVALID_SIGNATURE";
     public static final String AMOUNT_MISMATCH = "AMOUNT_MISMATCH";
+    public static final String PAYMENT_CLOSED = "PAYMENT_CLOSED";
 
     // Chung
     public static final String UNAUTHORIZED = "UNAUTHORIZED";
