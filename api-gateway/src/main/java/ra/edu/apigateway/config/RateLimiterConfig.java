@@ -48,9 +48,12 @@ public class RateLimiterConfig {
             }
 
             // Fallback theo client IP
+            // Dùng phần tử CUỐI của X-Forwarded-For — do Nginx ghi vào, client không giả được.
+            // Phần tử đầu do client tự gửi nên có thể bị spoofed để né rate limit.
             String xForwardedFor = exchange.getRequest().getHeaders().getFirst("X-Forwarded-For");
             if (xForwardedFor != null && !xForwardedFor.isBlank()) {
-                String clientIp = xForwardedFor.split(",")[0].trim();
+                String[] parts = xForwardedFor.split(",");
+                String clientIp = parts[parts.length - 1].trim();
                 return Mono.just("ip:" + clientIp);
             }
 
