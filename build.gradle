@@ -48,7 +48,10 @@ subprojects {
     def envVars = loadDotEnv()
 
     tasks.withType(Test).configureEach {
-        useJUnitPlatform()
+        useJUnitPlatform {
+            // GitHub Actions tu dat CI=true -> bo test can DB/Redis/RabbitMQ (@Tag("integration"))
+            if (System.getenv('CI')) excludeTags 'integration'
+        }
         environment envVars
     }
 

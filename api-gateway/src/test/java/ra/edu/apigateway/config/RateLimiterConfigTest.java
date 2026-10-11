@@ -69,8 +69,10 @@ class RateLimiterConfigTest {
     }
 
     @Test
-    @DisplayName("Không có token, có X-Forwarded-For -> resolve theo client IP từ header")
+    @DisplayName("Không có token, có X-Forwarded-For -> lấy IP CUỐI (Nginx ghi), bỏ qua IP đầu client tự khai")
     void testResolveWithXForwardedFor() {
+        // Client tự gửi "X-Forwarded-For: 203.0.113.195" để giả IP; Nginx ($proxy_add_x_forwarded_for)
+        // nối IP thật 70.41.3.18 vào cuối. Lấy phần tử đầu thì mỗi request đổi IP giả là né được rate limit.
         MockServerHttpRequest request = MockServerHttpRequest.get("/api/v1/products")
                 .header("X-Forwarded-For", "203.0.113.195, 70.41.3.18")
                 .remoteAddress(new InetSocketAddress("10.0.0.1", 8080))
@@ -78,7 +80,7 @@ class RateLimiterConfigTest {
         MockServerWebExchange exchange = MockServerWebExchange.from(request);
 
         String key = keyResolver.resolve(exchange).block();
-        assertThat(key).isEqualTo("ip:203.0.113.195");
+        assertThat(key).isEqualTo("ip:70.41.3.18");
     }
 
     @Test
