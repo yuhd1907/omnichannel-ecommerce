@@ -33,4 +33,26 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
             WHERE order_id = :orderId AND status = 'PENDING'
             """, nativeQuery = true)
     int failIfPending(@Param("orderId") UUID orderId);
+
+    /**
+     * Ghi kết quả webhook. Chỉ đổi được khi còn PENDING: trả 1 nếu thắng, 0 nếu payment đã
+     * SUCCESS/FAILED (webhook đến muộn, đơn đã hủy...). Điều kiện status='PENDING' + khóa dòng
+     * của UPDATE là thứ chống hai kết quả khác nhau cùng ghi đè nhau.
+     */
+    @Modifying
+    @Query(value = """
+            UPDATE payments
+            SET status = :status, updated_at = now()
+            WHERE order_id = :orderId AND status = 'PENDING'
+            """, nativeQuery = true)
+    int markResultIfPending(@Param("orderId") UUID orderId, @Param("status") String status);
+
+    /** Tiền đã thu nhưng payment không còn PENDING -> cần đối soát / hoàn tiền thủ công. */
+    @Modifying
+    @Query(value = """
+            UPDATE payments
+            SET needs_refund = true, updated_at = now()
+            WHERE order_id = :orderId
+            """, nativeQuery = true)
+    int markNeedsRefund(@Param("orderId") UUID orderId);
 }
