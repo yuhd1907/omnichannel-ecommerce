@@ -32,7 +32,8 @@ public class OrderEventListener {
 
     private static final Map<String, NotificationType> TYPES = Map.of(
             RabbitTopologyConfig.RK_ORDER_CREATED,   NotificationType.ORDER_CREATED,
-            RabbitTopologyConfig.RK_ORDER_CANCELLED, NotificationType.ORDER_CANCELLED
+            RabbitTopologyConfig.RK_ORDER_CANCELLED, NotificationType.ORDER_CANCELLED,
+            RabbitTopologyConfig.RK_ORDER_CONFIRMED, NotificationType.ORDER_CONFIRMED
     );
 
     private final NotificationService notificationService;

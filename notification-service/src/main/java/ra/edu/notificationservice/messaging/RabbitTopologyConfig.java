@@ -23,6 +23,7 @@ public class RabbitTopologyConfig {
     public static final String ORDER_EVENTS_EXCHANGE = "order.events";
     public static final String RK_ORDER_CREATED      = "order.created";
     public static final String RK_ORDER_CANCELLED    = "order.cancelled";
+    public static final String RK_ORDER_CONFIRMED    = "order.confirmed";
 
     public static final String QUEUE = "notification.order-events";
     public static final String DLX   = QUEUE + ".dlx";
@@ -47,6 +48,12 @@ public class RabbitTopologyConfig {
     @Bean
     public Binding orderCancelledBinding() {
         return BindingBuilder.bind(notificationOrderEventsQueue()).to(orderEventsExchange()).with(RK_ORDER_CANCELLED);
+    }
+
+    /** Order relay publish với mandatory: thiếu binding này thì ORDER_CONFIRMED bị return và thành FAILED. */
+    @Bean
+    public Binding orderConfirmedBinding() {
+        return BindingBuilder.bind(notificationOrderEventsQueue()).to(orderEventsExchange()).with(RK_ORDER_CONFIRMED);
     }
 
     @Bean

@@ -35,6 +35,7 @@ public class NotificationService {
         String content = switch (type) {
             case ORDER_CREATED   -> "Gửi xác nhận đơn " + orderId + " tới user " + userId;
             case ORDER_CANCELLED -> "Gửi thông báo hủy đơn " + orderId + " tới user " + userId;
+            case ORDER_CONFIRMED -> "Gửi xác nhận thanh toán đơn " + orderId + " tới user " + userId;
         };
         notificationRepository.save(Notification.builder()
                 .userId(userId)
