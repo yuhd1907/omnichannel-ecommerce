@@ -11,9 +11,9 @@ Thiết kế giao tiếp bất đồng bộ giữa các service. Bối cảnh t�
 | Exchange (topic) | Routing key | Queue | DLX → DLQ | Consumer | Trạng thái |
 | --- | --- | --- | --- | --- | --- |
 | `order.events` | `order.created`, `order.cancelled` | `notification.order-events` | `notification.order-events.dlx` → `.dlq` | notification-service | ✅ |
-| `order.events` | `order.created`, `order.cancelled` | `payment.order-events` | `payment.order-events.dlx` → `.dlq` | payment-service | Đang làm |
-| `payment.events` *(mới)* | `payment.succeeded`, `payment.failed` | `order.payment-events` | `order.payment-events.dlx` → `.dlq` | order-service *(làm sau)* | Kế hoạch |
-| `order.events` | `order.confirmed` *(mới)* | `notification.order-events` | *(đã có)* | notification-service *(làm sau)* | Kế hoạch |
+| `order.events` | `order.created`, `order.cancelled` | `payment.order-events` | `payment.order-events.dlx` → `.dlq` | payment-service | ✅ |
+| `payment.events` | `payment.succeeded`, `payment.failed` | `order.payment-events` | `order.payment-events.dlx` → `.dlq` | order-service | ✅ consumer; ⚠️ payment **chưa có relay** — event chỉ nằm trong outbox của payment |
+| `order.events` | `order.confirmed` | `notification.order-events` | *(đã có)* | notification-service | ✅ |
 | `product.events` | `product.sku.created` | `order.product-sku-created` | `order.product-sku-created.dlx` → `.dlq` | order-service | Kế hoạch |
 
 **Quy ước đặt tên**
@@ -29,8 +29,8 @@ Thiết kế giao tiếp bất đồng bộ giữa các service. Bối cảnh t�
 
 | Service | Khai báo | Ghi chú |
 | --- | --- | --- |
-| order-service | exchange `order.events`; (làm sau: exchange `payment.events`, queue `order.payment-events` + binding, DLX + DLQ) | bên phát `order.events`, bên nhận `payment.events` |
-| notification-service | exchange `order.events`, queue `notification.order-events` + binding (thêm `order.confirmed` làm sau), DLX + DLQ | khai báo lặp exchange để binding không lỗi khi khởi động trước bên phát |
+| order-service | exchange `order.events`; exchange `payment.events`, queue `order.payment-events` + binding (`payment.succeeded`, `payment.failed`), DLX + DLQ | bên phát `order.events`, bên nhận `payment.events` |
+| notification-service | exchange `order.events`, queue `notification.order-events` + binding (`order.created`, `order.cancelled`, `order.confirmed`), DLX + DLQ | khai báo lặp exchange để binding không lỗi khi khởi động trước bên phát. Thiếu binding `order.confirmed` thì relay của order (mandatory) nhận return và đẩy `ORDER_CONFIRMED` sang `FAILED` |
 | payment-service | exchange `order.events`, queue `payment.order-events` + binding (`order.created`, `order.cancelled`), DLX + DLQ; exchange `payment.events` | bên nhận `order.events`, bên phát `payment.events` |
 | product-service (kế hoạch) | exchange `product.events` | cần thêm `spring-boot-starter-amqp` + biến môi trường Rabbit trong compose |
 

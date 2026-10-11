@@ -104,6 +104,16 @@ class OutboxRelayTest {
     }
 
     @Test
+    @DisplayName("ORDER_CONFIRMED -> routing key order.confirmed")
+    void confirmed_routesToOrderConfirmed() {
+        brokerConfirms(true, null);
+
+        relay.publish(event("ORDER_CONFIRMED"));
+
+        verify(rabbitTemplate).send(eq("order.events"), eq("order.confirmed"), any(Message.class), any(CorrelationData.class));
+    }
+
+    @Test
     @DisplayName("Broker NACK -> incrementRetry, không markSent")
     void nack_incrementsRetry() {
         OutboxEvent e = event("ORDER_CREATED");

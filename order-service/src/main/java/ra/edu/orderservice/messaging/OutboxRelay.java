@@ -53,7 +53,8 @@ public class OutboxRelay {
     /** event_type trong outbox -> routing key trên exchange order.events. */
     private static final Map<String, String> ROUTING_KEYS = Map.of(
             "ORDER_CREATED",   RabbitTopologyConfig.RK_ORDER_CREATED,
-            "ORDER_CANCELLED", RabbitTopologyConfig.RK_ORDER_CANCELLED
+            "ORDER_CANCELLED", RabbitTopologyConfig.RK_ORDER_CANCELLED,
+            "ORDER_CONFIRMED", RabbitTopologyConfig.RK_ORDER_CONFIRMED
     );
 
     private final OutboxEventRepository outboxEventRepository;

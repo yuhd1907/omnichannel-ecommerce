@@ -66,6 +66,9 @@ class OrderServiceImplTest {
     @Mock
     private RLock mockLock;
 
+    @Mock
+    private OrderStateService orderStateService;
+
     private OrderServiceImpl orderService;
 
     private final UUID userId = UUID.randomUUID();
@@ -80,7 +83,8 @@ class OrderServiceImplTest {
                 productClient,
                 identityClient,
                 transactionTemplate,
-                redissonClient
+                redissonClient,
+                orderStateService
         );
 
         // Giả lập transactionTemplate.execute thực thi callback trực tiếp
@@ -243,5 +247,55 @@ class OrderServiceImplTest {
 
         verify(outboxEventRepository, never()).save(any());
         verify(mockLock).unlock(); // Lock vẫn được nhả an toàn trong finally
+    }
+
+    // ─────────────────────────── cancelOrder ──────────────────────────
+
+    private Order pendingOrder(UUID orderId, UUID ownerId) {
+        return Order.builder().id(orderId).userId(ownerId).channel("WEB").status("PENDING")
+                .shippingRecipientName("A").shippingPhone("0900000000").shippingAddress("HCM").build();
+    }
+
+    @Test
+    @DisplayName("cancelOrder: không phải chủ đơn -> 404, không chạm trạng thái")
+    void cancelOrder_notOwner_404() {
+        UUID orderId = UUID.randomUUID();
+        when(orderRepository.findById(orderId)).thenReturn(java.util.Optional.of(pendingOrder(orderId, UUID.randomUUID())));
+
+        assertThatThrownBy(() -> orderService.cancelOrder(orderId, userId, false))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+        verifyNoInteractions(orderStateService);
+    }
+
+    @Test
+    @DisplayName("cancelOrder: đơn không còn PENDING -> 409 ORDER_NOT_CANCELLABLE")
+    void cancelOrder_notPending_409() {
+        UUID orderId = UUID.randomUUID();
+        when(orderRepository.findById(orderId)).thenReturn(java.util.Optional.of(pendingOrder(orderId, userId)));
+        when(orderStateService.cancelAndRelease(orderId, "UNPAID", "USER_CANCELLED")).thenReturn(false);
+
+        assertThatThrownBy(() -> orderService.cancelOrder(orderId, userId, false))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(ErrorCode.ORDER_NOT_CANCELLABLE);
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                });
+    }
+
+    @Test
+    @DisplayName("cancelOrder: thành công -> giao cho OrderStateService, KHÔNG tự release kho, trả bản nạp lại")
+    void cancelOrder_success_delegatesToStateService() {
+        UUID orderId = UUID.randomUUID();
+        Order cancelled = pendingOrder(orderId, userId);
+        cancelled.setStatus("CANCELLED");
+        when(orderRepository.findById(orderId)).thenReturn(java.util.Optional.of(pendingOrder(orderId, userId)));
+        when(orderStateService.cancelAndRelease(orderId, "UNPAID", "USER_CANCELLED")).thenReturn(true);
+        when(orderRepository.findWithItemsById(orderId)).thenReturn(java.util.Optional.of(cancelled));
+
+        OrderDto dto = orderService.cancelOrder(orderId, userId, false);
+
+        assertThat(dto.status()).isEqualTo("CANCELLED");
+        verify(inventoryRepository, never()).release(any(), anyLong());
+        verify(orderRepository, never()).save(any());
     }
 }

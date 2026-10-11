@@ -33,6 +33,7 @@ import ra.edu.orderservice.repository.InventoryRepository;
 import ra.edu.orderservice.repository.OrderRepository;
 import ra.edu.orderservice.repository.OutboxEventRepository;
 import ra.edu.orderservice.service.OrderService;
+import ra.edu.orderservice.service.OrderStateService;
 
 import java.math.BigDecimal;
 import java.util.*;
@@ -53,6 +54,7 @@ public class OrderServiceImpl implements OrderService {
     private final IdentityClient         identityClient;
     private final TransactionTemplate    transactionTemplate;
     private final RedissonClient         redissonClient;
+    private final OrderStateService      orderStateService;
 
     @Value("${order.inventory-lock.enabled:true}")
     private boolean lockEnabled = true;
@@ -286,14 +288,6 @@ public class OrderServiceImpl implements OrderService {
                 + '}';
     }
 
-    /** Build JSON 2 trường cho outbox cancel payload. */
-    private String buildCancelPayload(Order order) {
-        return '{'
-                + "\"orderId\":\"" + order.getId()     + '"'
-                + ",\"userId\":\"" + order.getUserId() + '"'
-                + '}';
-    }
-
     private OrderDto toDto(Order order) {
         List<OrderDto.OrderItemDto> itemDtos = order.getItems().stream()
                 .map(i -> new OrderDto.OrderItemDto(
@@ -368,7 +362,7 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional
     public OrderDto cancelOrder(UUID orderId, UUID userId, boolean isAdmin) {
-        Order order = orderRepository.findWithItemsById(orderId)
+        Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new BusinessException(
                         "ORDER_NOT_FOUND", "Order not found", HttpStatus.NOT_FOUND));
 
@@ -378,38 +372,16 @@ public class OrderServiceImpl implements OrderService {
                     "ORDER_NOT_FOUND", "Order not found", HttpStatus.NOT_FOUND);
         }
 
-        if (!"PENDING".equals(order.getStatus())) {
+        // KHÔNG tự kiểm status trong Java rồi setStatus: thanh toán thành công có thể tới đúng lúc
+        // này. cancelAndRelease chuyển trạng thái bằng UPDATE ... WHERE status='PENDING'.
+        if (!orderStateService.cancelAndRelease(orderId, "UNPAID", "USER_CANCELLED")) {
             throw new BusinessException(
-                    "CANNOT_CANCEL",
-                    "Only PENDING orders can be cancelled, current status: " + order.getStatus(),
+                    ErrorCode.ORDER_NOT_CANCELLABLE,
+                    "Only PENDING orders can be cancelled",
                     HttpStatus.CONFLICT);
         }
 
-        // Hoàn kho: release từng SKU trong cùng transaction
-        for (OrderItem item : order.getItems()) {
-            int rowCount = inventoryRepository.release(item.getSkuCode(), item.getQuantity());
-            if (rowCount == 0) {
-                // Không nên xảy ra nếu data nhất quán — log rõ để điều tra
-                log.error("Release inventory failed: sku={}, qty={}, orderId={}",
-                        item.getSkuCode(), item.getQuantity(), orderId);
-                throw new BusinessException(
-                        "INVENTORY_RELEASE_FAILED",
-                        "Could not release inventory for SKU: " + item.getSkuCode(),
-                        HttpStatus.INTERNAL_SERVER_ERROR);
-            }
-        }
-
-        order.setStatus("CANCELLED");
-
-        // Ghi outbox event ORDER_CANCELLED
-        outboxEventRepository.save(OutboxEvent.builder()
-                .aggregateType("Order")
-                .aggregateId(order.getId())
-                .eventType("ORDER_CANCELLED")
-                .payload(buildCancelPayload(order))
-                .build());
-
-        log.info("Order cancelled: id={}, userId={}", orderId, userId);
-        return toDto(orderRepository.save(order));
+        log.info("Order cancelled by {}: id={}", isAdmin ? "admin" : "owner", orderId);
+        return toDto(orderRepository.findWithItemsById(orderId).orElseThrow());
     }
 }

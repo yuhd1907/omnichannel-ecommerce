@@ -26,7 +26,7 @@ public interface OrderService {
 
     /**
      * Hủy đơn PENDING: đổi status → CANCELLED, hoàn kho trong cùng transaction.
-     * Đơn không phải PENDING → 409 CANNOT_CANCEL.
+     * Đơn không phải PENDING → 409 ORDER_NOT_CANCELLABLE.
      * Đơn không của user (và không phải ADMIN) → 404.
      */
     OrderDto cancelOrder(UUID orderId, UUID userId, boolean isAdmin);

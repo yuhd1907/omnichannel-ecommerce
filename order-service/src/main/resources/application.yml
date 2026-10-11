@@ -43,6 +43,18 @@ spring:
     publisher-returns: true
     template:
       mandatory: true
+    listener:
+      simple:
+        # Het retry -> reject khong requeue -> DLX -> DLQ. Khong requeue vo han.
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          # Boot 4 dung 'max-retries' (so lan thu LAI), KHONG con 'max-attempts'
+          # (key sai bi bo qua im lang). 2 lan thu lai = tong 3 lan xu ly.
+          max-retries: 2
+          initial-interval: 1s
+          multiplier: 2
+          max-interval: 5s
   grpc:
     client:
       channel:

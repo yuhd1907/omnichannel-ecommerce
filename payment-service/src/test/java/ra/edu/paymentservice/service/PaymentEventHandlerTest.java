@@ -6,11 +6,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import ra.edu.paymentservice.entity.Payment;
 import ra.edu.paymentservice.repository.PaymentRepository;
 
 import java.math.BigDecimal;
+import java.util.Optional;
 import java.util.UUID;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -64,5 +67,32 @@ class PaymentEventHandlerTest {
         paymentEventHandler.handleOrderCancelled(ORDER_ID);
 
         verify(paymentRepository, times(1)).failIfPending(ORDER_ID);
+        verify(paymentRepository, never()).markNeedsRefund(any());
+    }
+
+    @Test
+    @DisplayName("handleOrderCancelled khi payment đã SUCCESS (webhook tới trước) -> markNeedsRefund")
+    void handleOrderCancelled_afterSuccess_marksNeedsRefund() {
+        when(paymentRepository.failIfPending(ORDER_ID)).thenReturn(0);
+        when(paymentRepository.findByOrderId(ORDER_ID)).thenReturn(Optional.of(
+                Payment.builder().id(UUID.randomUUID()).orderId(ORDER_ID).userId(USER_ID)
+                        .amount(AMOUNT).status("SUCCESS").build()));
+
+        paymentEventHandler.handleOrderCancelled(ORDER_ID);
+
+        verify(paymentRepository).markNeedsRefund(ORDER_ID);
+    }
+
+    @Test
+    @DisplayName("handleOrderCancelled khi payment đã FAILED (event lặp) -> không needs_refund")
+    void handleOrderCancelled_alreadyFailed_noRefund() {
+        when(paymentRepository.failIfPending(ORDER_ID)).thenReturn(0);
+        when(paymentRepository.findByOrderId(ORDER_ID)).thenReturn(Optional.of(
+                Payment.builder().id(UUID.randomUUID()).orderId(ORDER_ID).userId(USER_ID)
+                        .amount(AMOUNT).status("FAILED").build()));
+
+        paymentEventHandler.handleOrderCancelled(ORDER_ID);
+
+        verify(paymentRepository, never()).markNeedsRefund(any());
     }
 }
