@@ -12,7 +12,7 @@ Thiết kế giao tiếp bất đồng bộ giữa các service. Bối cảnh t�
 | --- | --- | --- | --- | --- | --- |
 | `order.events` | `order.created`, `order.cancelled` | `notification.order-events` | `notification.order-events.dlx` → `.dlq` | notification-service | ✅ |
 | `order.events` | `order.created`, `order.cancelled` | `payment.order-events` | `payment.order-events.dlx` → `.dlq` | payment-service | ✅ |
-| `payment.events` | `payment.succeeded`, `payment.failed` | `order.payment-events` | `order.payment-events.dlx` → `.dlq` | order-service | ✅ consumer; ⚠️ payment **chưa có relay** — event chỉ nằm trong outbox của payment |
+| `payment.events` | `payment.succeeded`, `payment.failed` | `order.payment-events` | `order.payment-events.dlx` → `.dlq` | order-service | ✅ |
 | `order.events` | `order.confirmed` | `notification.order-events` | *(đã có)* | notification-service | ✅ |
 | `product.events` | `product.sku.created` | `order.product-sku-created` | `order.product-sku-created.dlx` → `.dlq` | order-service | Kế hoạch |
 
