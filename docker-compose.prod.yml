@@ -69,6 +69,8 @@ services:
   # Neu de 0.0.0.0 thi Docker ghi thang vao iptables, ufw khong chan duoc.
   api-gateway:
     restart: unless-stopped
+    environment:
+      MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: never
     image: ghcr.io/yuhd1907/omnichannel-api-gateway:${IMAGE_TAG:-latest}
     build: !reset null
     ports: !override
