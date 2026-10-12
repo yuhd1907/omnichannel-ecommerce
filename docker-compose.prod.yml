@@ -36,29 +36,41 @@ services:
 
   identity-service:
     restart: unless-stopped
+    image: ghcr.io/yuhd1907/omnichannel-identity-service:${IMAGE_TAG:-latest}
+    build: !reset null
     ports: !reset []
 
   product-service:
     restart: unless-stopped
+    image: ghcr.io/yuhd1907/omnichannel-product-service:${IMAGE_TAG:-latest}
+    build: !reset null
     # Bo ca 9082: grpcurl tren server thi chay qua 'docker exec' hoac SSH tunnel.
     ports: !reset []
 
   order-service:
     restart: unless-stopped
+    image: ghcr.io/yuhd1907/omnichannel-order-service:${IMAGE_TAG:-latest}
+    build: !reset null
     ports: !reset []
 
   payment-service:
     restart: unless-stopped
+    image: ghcr.io/yuhd1907/omnichannel-payment-service:${IMAGE_TAG:-latest}
+    build: !reset null
     ports: !reset []
 
   notification-service:
     restart: unless-stopped
+    image: ghcr.io/yuhd1907/omnichannel-notification-service:${IMAGE_TAG:-latest}
+    build: !reset null
     ports: !reset []
 
   # api-gateway: chi bind 127.0.0.1 de Nginx la reverse proxy duy nhat nhan request tu Internet.
   # Neu de 0.0.0.0 thi Docker ghi thang vao iptables, ufw khong chan duoc.
   api-gateway:
     restart: unless-stopped
+    image: ghcr.io/yuhd1907/omnichannel-api-gateway:${IMAGE_TAG:-latest}
+    build: !reset null
     ports: !override
       - "127.0.0.1:8080:8080"
 
