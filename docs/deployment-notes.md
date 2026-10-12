@@ -45,3 +45,43 @@ docker exec ecommerce-rabbitmq rabbitmq-plugins enable rabbitmq_shovel rabbitmq_
 ```
 
 Xem chi tiết topology tại [Messaging_Topology.md](Messaging_Topology.md).
+
+## Nginx + HTTPS
+
+Nginx trên VPS đóng vai trò Reverse Proxy duy nhất đón request từ Internet (cổng 80 và 443), chuyển tiếp vào `api-gateway` tại `127.0.0.1:8080`.
+
+File cấu hình mẫu lưu tại [deploy/nginx/omnichannel.conf](../deploy/nginx/omnichannel.conf).
+
+**1. Áp dụng cấu hình Nginx trên VPS**
+
+```bash
+sudo cp deploy/nginx/omnichannel.conf /etc/nginx/sites-available/omnichannel.conf
+sudo ln -sf /etc/nginx/sites-available/omnichannel.conf /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+**2. Chứng chỉ SSL Let's Encrypt (DNS-01 qua DuckDNS)**
+
+Do hạ tầng mạng của nhà cung cấp VPS chặn chiều kết nối quốc tế vào cổng 80 (khiến HTTP-01 challenge bị timeout), chứng chỉ SSL được cấp qua phương thức **DNS-01 challenge** (xác thực qua bản ghi TXT của DuckDNS):
+
+```bash
+sudo certbot certonly --manual --preferred-challenges dns -d huyecommerce.duckdns.org
+```
+
+Certbot sẽ yêu cầu tạo bản ghi TXT `_acme-challenge.huyecommerce.duckdns.org` trên DuckDNS. Cập nhật qua DuckDNS API:
+
+```bash
+curl "https://www.duckdns.org/update?domains=huyecommerce&token=<DUCKDNS_TOKEN>&txt=<CHUO_TXT_TU_CERTBOT>"
+```
+
+Sau khi xác thực thành công, chứng chỉ được lưu tại `/etc/letsencrypt/live/huyecommerce.duckdns.org/`.
+
+**3. Gia hạn chứng chỉ (thủ công mỗi 90 ngày)**
+
+Chứng chỉ Let's Encrypt có thời hạn 90 ngày. Do dùng DNS-01 thủ công, trước khi hết hạn thực hiện chạy lại lệnh certonly ở trên để cập nhật chứng chỉ mới, sau đó reload Nginx:
+
+```bash
+sudo systemctl reload nginx
+```
+
