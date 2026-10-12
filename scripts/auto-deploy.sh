@@ -22,7 +22,11 @@ git reset -q --hard origin/main
 NEW_CODE=$(git rev-parse HEAD)
 
 OLD_IMG=$(digest)
-$DC pull -q $APPS
+if ! PULL_OUT=$($DC pull -q $APPS 2>&1); then
+  echo "=== $(date '+%F %T') PULL FAILED"
+  echo "$PULL_OUT"
+  exit 1
+fi
 NEW_IMG=$(digest)
 
 if [ "$OLD_CODE" != "$NEW_CODE" ] || [ "$OLD_IMG" != "$NEW_IMG" ]; then
