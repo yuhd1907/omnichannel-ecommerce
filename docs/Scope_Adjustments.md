@@ -20,6 +20,7 @@ Ba ràng buộc chi phối mọi điều chỉnh bên dưới:
 | 4 | Hoàn tiền (refund) | Không hoàn tiền tự động; đối soát thủ công | Là một luồng nghiệp vụ riêng phụ thuộc API từng cổng thanh toán | Hoãn |
 | 5 | Thông báo SMS | Chỉ email giả lập (kế hoạch) | Cần nhà cung cấp trả phí; về kiến trúc không khác email | Hoãn |
 | 6 | CD qua SSH (`appleboy/ssh-action`) | CD dạng pull thay cho `appleboy/ssh-action` | Nhà cung cấp VPS chặn kết nối quốc tế vào cổng 22 (GitHub Actions báo `dial tcp :22 i/o timeout`) và chặn VPS kết nối ra hạ tầng Azure của GitHub Actions (`pipelines/broker.actions.githubusercontent.com` timeout), nên không dùng được SSH-push lẫn self-hosted runner. Giải pháp: GitHub Actions build và push image lên GHCR; trên VPS, cron chạy `scripts/auto-deploy.sh` mỗi 2 phút (`git fetch` + `docker compose pull`, có thay đổi thì `up -d --remove-orphans`). Mô hình giống GitOps (Argo CD, Flux). Độ trễ deploy tối đa khoảng 2 phút. | Đã thay thế |
+| 7 | Chứng chỉ SSL tự động qua HTTP-01 | Cấp qua DNS-01 (DuckDNS TXT), gia hạn thủ công mỗi 90 ngày | Nhà cung cấp VPS chặn kết nối quốc tế vào cổng 80 (đã xác nhận bằng tcpdump), khiến HTTP-01 challenge bị timeout; website chỉ truy cập được từ Việt Nam do nhà cung cấp chặn kết nối quốc tế. Giải pháp: Cấp SSL qua DNS-01 challenge (bản ghi TXT trên DuckDNS) không phụ thuộc cổng 80; gia hạn thủ công mỗi 90 ngày. | Đã thay thế |
 
 ## 3. Chi tiết từng điều chỉnh
 
