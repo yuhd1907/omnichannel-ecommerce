@@ -19,6 +19,7 @@ Ba ràng buộc chi phối mọi điều chỉnh bên dưới:
 | 3 | Inventory là service riêng | Gộp vào **Order & Inventory**, chung `order_db` | Giữ hàng phải nguyên tử với tạo đơn; tách ra buộc phải làm giao dịch phân tán | Đã gộp |
 | 4 | Hoàn tiền (refund) | Không hoàn tiền tự động; đối soát thủ công | Là một luồng nghiệp vụ riêng phụ thuộc API từng cổng thanh toán | Hoãn |
 | 5 | Thông báo SMS | Chỉ email giả lập (kế hoạch) | Cần nhà cung cấp trả phí; về kiến trúc không khác email | Hoãn |
+| 6 | CD qua SSH (`appleboy/ssh-action`) | CD dạng pull thay cho `appleboy/ssh-action` | Nhà cung cấp VPS chặn kết nối quốc tế vào cổng 22 (GitHub Actions báo `dial tcp :22 i/o timeout`) và chặn VPS kết nối ra hạ tầng Azure của GitHub Actions (`pipelines/broker.actions.githubusercontent.com` timeout), nên không dùng được SSH-push lẫn self-hosted runner. Giải pháp: GitHub Actions build và push image lên GHCR; trên VPS, cron chạy `scripts/auto-deploy.sh` mỗi 2 phút (`git fetch` + `docker compose pull`, có thay đổi thì `up -d --remove-orphans`). Mô hình giống GitOps (Argo CD, Flux). Độ trễ deploy tối đa khoảng 2 phút. | Đã thay thế |
 
 ## 3. Chi tiết từng điều chỉnh
 

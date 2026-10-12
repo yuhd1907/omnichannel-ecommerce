@@ -1,4 +1,4 @@
-name: Deploy
+name: Build & Push Images
 on:
   push:
     branches: [main]
@@ -51,23 +51,3 @@ jobs:
             ghcr.io/yuhd1907/omnichannel-${{ matrix.service }}:${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 20m
-          script: |
-            set -e
-            cd ~/omnichannel-ecommerce
-            git fetch origin main
-            git reset --hard origin/main
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
-            docker image prune -f
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
