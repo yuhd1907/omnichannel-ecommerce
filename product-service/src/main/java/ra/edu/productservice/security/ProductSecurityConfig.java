@@ -51,6 +51,10 @@ public class ProductSecurityConfig {
                         // server.error.include-stacktrace o production.
                         .requestMatchers("/error").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
+                        // Prometheus scrape trong mạng Docker (prod không publish port service; gateway bị Nginx chặn)
+                        .requestMatchers("/actuator/prometheus").permitAll()
+                        // OpenAPI spec cho Swagger UI ở gateway
+                        .requestMatchers("/v3/api-docs", "/v3/api-docs/**").permitAll()
                         // Internal endpoint cho service-to-service (không expose qua Gateway)
                         .requestMatchers("/internal/**").permitAll()
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/v1/products/**").permitAll()

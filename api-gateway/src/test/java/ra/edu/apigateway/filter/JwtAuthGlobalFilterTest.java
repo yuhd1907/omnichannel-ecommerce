@@ -154,4 +154,24 @@ class JwtAuthGlobalFilterTest {
         assertThat(filterChained.get()).isTrue();
         assertThat(exchange.getResponse().getStatusCode()).isNull();
     }
+
+    @Test
+    @DisplayName("Whitelist: GET /api-docs/order (OpenAPI spec) không token -> cho qua; /api-docs/order/x thì không")
+    void testWhitelistApiDocs() {
+        AtomicBoolean filterChained = new AtomicBoolean(false);
+        GatewayFilterChain chain = ex -> {
+            filterChained.set(true);
+            return Mono.empty();
+        };
+
+        MockServerWebExchange ok = MockServerWebExchange.from(MockServerHttpRequest.get("/api-docs/order").build());
+        filter.filter(ok, chain).block();
+        assertThat(filterChained.get()).isTrue();
+
+        filterChained.set(false);
+        MockServerWebExchange nested = MockServerWebExchange.from(MockServerHttpRequest.get("/api-docs/order/secret").build());
+        filter.filter(nested, chain).block();
+        assertThat(filterChained.get()).isFalse();
+        assertThat(nested.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
 }
