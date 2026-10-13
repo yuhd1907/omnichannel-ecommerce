@@ -12,6 +12,7 @@ Hệ thống thương mại điện tử đa kênh (Web / Mobile) theo kiến tr
 
 | Tài liệu | Nội dung |
 | --- | --- |
+| [docs/Project_Overview.md](docs/Project_Overview.md) | **Tổng quan: đã làm được gì, chưa làm được gì** và hướng phát triển |
 | [docs/DDD_DB_API_Contract.md](docs/DDD_DB_API_Contract.md) | Bounded context, schema từng database, API contract v1, luồng checkout và giữ hàng |
 | [docs/Messaging_Topology.md](docs/Messaging_Topology.md) | RabbitMQ topology, DLQ, Outbox relay, consumer idempotent, hạn chế đã biết |
 | [docs/Scope_Adjustments.md](docs/Scope_Adjustments.md) | Đối chiếu với đề bài và lý do điều chỉnh phạm vi |

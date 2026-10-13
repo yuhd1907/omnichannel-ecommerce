@@ -28,6 +28,8 @@
 //
 // Doc ket qua: 'dropped_iterations' > 0 nghia la he thong khong theo kip muc tai yeu cau
 // (k6 het VU de gui) -> muc req/s thuc te dat duoc la 'http_reqs' / thoi gian.
+// other_status > 0 thuong la request timeout (status 0) o giai doan con hang. Ket qua lan chay
+// 13/10/2026 va cach doc: docs/Flashsale_Results.md, muc "Load test thong luong".
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
@@ -82,7 +84,13 @@ function batchWithRetry(requests, okStatus, label) {
   const results = new Array(requests.length);
   let pending = requests.map((_, i) => i);
   for (let attempt = 0; attempt < 30 && pending.length > 0; attempt++) {
-    const responses = http.batch(pending.map((i) => requests[i]));
+    // Callback rieng cho setup: login tra 200 khong duoc tinh vao http_req_failed
+    // (callback chung chi coi 201/409 la hop le cho buoc dat hang).
+    const callback = http.expectedStatuses(...okStatus, 429);
+    const responses = http.batch(pending.map((i) => {
+      const [method, url, body, params] = requests[i];
+      return [method, url, body, { ...params, responseCallback: callback }];
+    }));
     const retry = [];
     responses.forEach((r, k) => {
       const i = pending[k];
