@@ -5,12 +5,24 @@
 *.local
 !.env.example
 
-# INTELLIJ IDEA
+# IDE (IntelliJ, Eclipse/STS, VS Code, NetBeans)
 .idea/
 *.iml
 *.iws
 *.ipr
 out/
+.vscode/
+.classpath
+.project
+.settings/
+.factorypath
+.apt_generated
+.springBeans
+.sts4-cache
+bin/
+/nbproject/private/
+/.nb-gradle/
+HELP.md
 
 # GRADLE BUILD
 .gradle/

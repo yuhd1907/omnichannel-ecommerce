@@ -3,86 +3,104 @@
 //     "apk add -q graphviz ttf-dejavu && dot -Tpng -Gdpi=150 architecture.dot -o architecture.png"
 //
 // Quy uoc: xanh duong = REST, cam = gRPC, xanh la = AMQP (RabbitMQ),
-//          xam = truy cap du lieu. Net dut / khung dut = chua trien khai.
+//          xam = truy cap du lieu, tim = giam sat / cong cu demo.
 
 digraph architecture {
-  graph [rankdir=TB, fontname="DejaVu Sans", nodesep=0.55, ranksep=0.9, pad=0.35,
+  graph [rankdir=TB, fontname="DejaVu Sans", nodesep=0.5, ranksep=0.85, pad=0.35,
          bgcolor="white", newrank=true, splines=true,
-         label=<<b>Omnichannel E-Commerce — Kiến trúc hệ thống (MVP)</b>>, labelloc=t, fontsize=18];
+         label=<<b>Omnichannel E-Commerce — Kiến trúc hệ thống</b>>, labelloc=t, fontsize=18];
   node  [fontname="DejaVu Sans", fontsize=11, shape=box, style="rounded,filled",
          fillcolor="#F8FAFC", color="#334155", penwidth=1.3, margin="0.18,0.10"];
   edge  [fontname="DejaVu Sans", fontsize=9.5, penwidth=1.6, arrowsize=0.8];
 
   client [label=<<b>Web / Mobile client</b><br/><font point-size="9">channel = WEB | MOBILE</font>>,
           fillcolor="#EEF2FF"];
+  pg_gateway [label=<<b>Cổng thanh toán</b><br/><font point-size="9">MOCK — webhook ký HMAC-SHA256</font>>,
+              fillcolor="#FFFFFF", style="rounded,dashed,filled", color="#64748B"];
 
   legend [shape=plaintext, style="", margin=0, label=<
     <table border="1" cellborder="0" cellspacing="0" cellpadding="4" color="#CBD5E1">
       <tr><td colspan="2" align="left"><b>Chú giải</b></td></tr>
       <tr><td><font color="#2563EB"><b>━━━▶</b></font></td><td align="left"><font point-size="9">REST (HTTP / JSON)</font></td></tr>
       <tr><td><font color="#EA580C"><b>━━━▶</b></font></td><td align="left"><font point-size="9">gRPC (Protobuf, HTTP/2)</font></td></tr>
-      <tr><td><font color="#16A34A"><b>╍╍╍▶</b></font></td><td align="left"><font point-size="9">AMQP qua RabbitMQ — kế hoạch</font></td></tr>
+      <tr><td><font color="#16A34A"><b>━━━▶</b></font></td><td align="left"><font point-size="9">AMQP — event qua Transactional Outbox</font></td></tr>
       <tr><td><font color="#6B7280"><b>━━━</b></font></td><td align="left"><font point-size="9">JDBC / Redis</font></td></tr>
-      <tr><td><font color="#94A3B8"><b>┅┅┅</b></font></td><td align="left"><font point-size="9">khung đứt / nét đứt = chưa triển khai</font></td></tr>
+      <tr><td><font color="#7C3AED"><b>┅┅┅▶</b></font></td><td align="left"><font point-size="9">giám sát / email (Prometheus scrape, SMTP)</font></td></tr>
     </table>>];
 
+  nginx [label=<<b>Nginx</b>  :443<br/><font point-size="9">HTTPS (Let's Encrypt), reverse proxy duy nhất<br/>chặn /actuator/* trừ /actuator/health</font>>,
+         fillcolor="#F1F5F9", color="#0F172A"];
+
   subgraph cluster_net {
-    label=<<b>Docker network: ecommerce-network</b>   <font point-size="9">(prod: chỉ gateway :8080 mở ra Internet)</font>>;
+    label=<<b>Docker network: ecommerce-network</b>   <font point-size="9">(prod: chỉ gateway, bind 127.0.0.1:8080 cho Nginx)</font>>;
     style="rounded,dashed"; color="#94A3B8"; fontsize=11; margin=18;
 
     gateway [label=<<b>API Gateway</b>  :8080<br/>
 <font point-size="9">Spring Cloud Gateway (WebFlux)<br/>
-JwtAuthGlobalFilter — verify JWT, whitelist route public<br/>
-RequestRateLimiter — token bucket theo user / IP</font>>,
+JWT verify · rate limit (Redis token bucket)<br/>
+Swagger UI gom 4 service</font>>,
              fillcolor="#DBEAFE", color="#1D4ED8", penwidth=2];
 
     identity [label=<<b>Identity &amp; User</b>  :8081<br/><font point-size="9">register / login / refresh JWT<br/>user, role, address</font>>];
-    order    [label=<<b>Order &amp; Inventory</b>  :8083<br/><font point-size="9">tạo / hủy đơn, giữ hàng<br/>inventory cùng transaction với order</font>>,
-              fillcolor="#FFF7ED", color="#C2410C", penwidth=2];
     product  [label=<<b>Product Catalog</b>  :8082<br/><font point-size="9">REST: catalog, admin RBAC<br/>gRPC server :9082</font>>];
-    payment      [label=<<b>Payment</b>  :8084<br/><font point-size="9">khung — VNPAY / MOMO</font>>,
-                  style="rounded,dashed,filled", fillcolor="#FFFFFF", fontcolor="#64748B", color="#94A3B8"];
-    notification [label=<<b>Notification</b>  :8085<br/><font point-size="9">khung — email giả lập</font>>,
-                  style="rounded,dashed,filled", fillcolor="#FFFFFF", fontcolor="#64748B", color="#94A3B8"];
+    order    [label=<<b>Order &amp; Inventory</b>  :8083<br/><font point-size="9">đặt / hủy đơn, giữ hàng nguyên tử<br/>CONFIRMED → SHIPPING → COMPLETED<br/>outbox + job hủy đơn quá hạn</font>>,
+              fillcolor="#FFF7ED", color="#C2410C", penwidth=2];
+    payment      [label=<<b>Payment</b>  :8084<br/><font point-size="9">phiên thanh toán, webhook HMAC<br/>chống webhook lặp, outbox</font>>];
+    notification [label=<<b>Notification</b>  :8085<br/><font point-size="9">consumer idempotent<br/>gửi email sau commit</font>>];
 
     postgres [label=<<b>PostgreSQL 16</b> — database per service<br/>
 <font point-size="9">identity_db · product_db · order_db · payment_db · notification_db</font>>,
               shape=cylinder, fillcolor="#E0F2FE", color="#0369A1"];
     redis    [label=<<b>Redis 7</b><br/><font point-size="9">rate-limit tokens<br/>Redisson lock theo sku_code</font>>,
               shape=cylinder, fillcolor="#FEE2E2", color="#B91C1C"];
-    rabbitmq [label=<<b>RabbitMQ 3.13</b><br/><font point-size="9">event bus (kế hoạch)</font>>,
-              style="rounded,dashed,filled", fillcolor="#DCFCE7", color="#15803D"];
+    rabbitmq [label=<<b>RabbitMQ 3.13</b><br/><font point-size="9">order.events · payment.events<br/>DLQ cho message lỗi</font>>,
+              fillcolor="#DCFCE7", color="#15803D", penwidth=2];
 
-    // Order o hang rieng ngay duoi Gateway; Identity + Product (2 service Order phu
-    // thuoc dong bo) o hang duoi -> mui ten Feign/gRPC ngan, khong cat nhan route.
-    { rank=same; order; payment; notification; }
+    mailpit    [label=<<b>Mailpit</b><br/><font point-size="9">SMTP :1025 · hộp thư :8025</font>>, fillcolor="#F5F3FF", color="#7C3AED"];
+    prometheus [label=<<b>Prometheus</b>  :9090<br/><font point-size="9">scrape /actuator/prometheus</font>>, fillcolor="#F5F3FF", color="#7C3AED"];
+    grafana    [label=<<b>Grafana</b>  :3000<br/><font point-size="9">dashboard tổng quan</font>>, fillcolor="#F5F3FF", color="#7C3AED"];
+
+    // Order + Payment ngay duoi Gateway; Identity + Product (Order goi dong bo) hang duoi
+    // -> mui ten Feign/gRPC ngan, khong cat ngang nhan route.
+    { rank=same; order; payment; notification; mailpit; }
     { rank=same; identity; product; }
-    { rank=same; postgres -> redis -> rabbitmq [style=invis]; }
+    { rank=same; postgres; redis; rabbitmq; }
+    { rank=same; prometheus; grafana; }
   }
-  { rank=same; client; legend; }
+  { rank=same; client; pg_gateway; legend; }
 
   // ---- REST (xanh duong) ----
   edge [color="#2563EB", fontcolor="#1D4ED8"];
-  client  -> gateway  [label="  HTTP / JSON  /api/v1/**", penwidth=2.2];
-  gateway -> identity [label="/auth/**, /users/**  "];
-  gateway -> order    [label="/orders/**\n/admin/inventory/**"];
-  gateway -> product  [label="  /products/**\n  /admin/products/**"];
-  gateway -> payment  [label="  (kế hoạch)", style=dashed];
-  order   -> identity [label="Feign\n/internal/addresses/{id}"];
+  client     -> nginx   [label="  HTTPS  /api/v1/**", penwidth=2.2];
+  pg_gateway -> nginx   [label="  webhook", style=dashed];
+  nginx      -> gateway [penwidth=2.2];
+  gateway -> identity [label="/auth, /users  "];
+  gateway -> product  [label="/products"];
+  gateway -> order    [label="/orders\n/admin/orders, /admin/inventory"];
+  gateway -> payment  [label="  /orders/*/payments\n  /webhooks"];
+  order   -> identity [label="Feign\naddress"];
 
   // ---- gRPC (cam) ----
-  order -> product [label="gRPC\nBatchGetSkus / GetSku", color="#EA580C", fontcolor="#C2410C", penwidth=2.8];
+  order -> product [label="gRPC\nBatchGetSkus", color="#EA580C", fontcolor="#C2410C", penwidth=2.8];
 
-  // ---- AMQP (xanh la, chua trien khai) ----
-  edge [color="#16A34A", fontcolor="#15803D", style=dashed];
-  order    -> rabbitmq     [label="outbox events"];
-  payment  -> rabbitmq     [label="PaymentSucceeded / Failed"];
-  rabbitmq -> notification [label="Order events"];
+  // ---- AMQP (xanh la) ----
+  edge [color="#16A34A", fontcolor="#15803D", style=solid];
+  order    -> rabbitmq     [label="order.created / confirmed /\ncancelled / shipped / completed"];
+  payment  -> rabbitmq     [label="payment.succeeded / failed"];
+  rabbitmq -> payment      [label="order.created\norder.cancelled", style=dashed];
+  rabbitmq -> order        [label="payment.*", style=dashed];
+  rabbitmq -> notification [label="order.*"];
+
+  // ---- Giam sat / email (tim) ----
+  edge [color="#7C3AED", fontcolor="#6D28D9", style=dashed, penwidth=1.2];
+  notification -> mailpit   [label="SMTP"];
+  prometheus   -> gateway   [label="scrape 6 service", constraint=false];
+  grafana      -> prometheus;
 
   // ---- Truy cap du lieu (xam) ----
   edge [color="#6B7280", fontcolor="#4B5563", style=solid, penwidth=1.1, arrowhead=none, label=""];
   identity -> postgres; order -> postgres; product -> postgres;
-  payment -> postgres [style=dashed]; notification -> postgres [style=dashed];
-  gateway -> redis [xlabel="token bucket"];
+  payment -> postgres; notification -> postgres;
+  gateway -> redis [xlabel="token bucket", constraint=false];
   order   -> redis [xlabel="lock sku_code"];
 }

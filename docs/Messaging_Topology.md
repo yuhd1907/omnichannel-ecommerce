@@ -4,16 +4,15 @@ Thiết kế giao tiếp bất đồng bộ giữa các service. Bối cảnh t�
 
 ![RabbitMQ topology](rabbitmq-topology.png)
 
-*(Nguồn sơ đồ: [rabbitmq-topology.dot](rabbitmq-topology.dot). Khung nét đứt = chưa triển khai.)*
+*(Nguồn sơ đồ: [rabbitmq-topology.dot](rabbitmq-topology.dot).)*
 
 ## 1. Bảng topology
 
 | Exchange (topic) | Routing key | Queue | DLX → DLQ | Consumer | Trạng thái |
 | --- | --- | --- | --- | --- | --- |
-| `order.events` | `order.created`, `order.cancelled` | `notification.order-events` | `notification.order-events.dlx` → `.dlq` | notification-service | ✅ |
+| `order.events` | `order.created`, `order.confirmed`, `order.cancelled`, `order.shipped`, `order.completed` | `notification.order-events` | `notification.order-events.dlx` → `.dlq` | notification-service | ✅ |
 | `order.events` | `order.created`, `order.cancelled` | `payment.order-events` | `payment.order-events.dlx` → `.dlq` | payment-service | ✅ |
 | `payment.events` | `payment.succeeded`, `payment.failed` | `order.payment-events` | `order.payment-events.dlx` → `.dlq` | order-service | ✅ |
-| `order.events` | `order.confirmed` | `notification.order-events` | *(đã có)* | notification-service | ✅ |
 | `product.events` | `product.sku.created` | `order.product-sku-created` | `order.product-sku-created.dlx` → `.dlq` | order-service | Kế hoạch |
 
 **Quy ước đặt tên**
@@ -30,7 +29,7 @@ Thiết kế giao tiếp bất đồng bộ giữa các service. Bối cảnh t�
 | Service | Khai báo | Ghi chú |
 | --- | --- | --- |
 | order-service | exchange `order.events`; exchange `payment.events`, queue `order.payment-events` + binding (`payment.succeeded`, `payment.failed`), DLX + DLQ | bên phát `order.events`, bên nhận `payment.events` |
-| notification-service | exchange `order.events`, queue `notification.order-events` + binding (`order.created`, `order.cancelled`, `order.confirmed`), DLX + DLQ | khai báo lặp exchange để binding không lỗi khi khởi động trước bên phát. Thiếu binding `order.confirmed` thì relay của order (mandatory) nhận return và đẩy `ORDER_CONFIRMED` sang `FAILED` |
+| notification-service | exchange `order.events`, queue `notification.order-events` + binding (`order.created`, `order.confirmed`, `order.cancelled`, `order.shipped`, `order.completed`), DLX + DLQ | khai báo lặp exchange để binding không lỗi khi khởi động trước bên phát. Relay của order publish với `mandatory`: routing key nào chưa có queue bind thì message bị return và event chuyển `FAILED`, nên **thêm event mới phải thêm binding ở đây** |
 | payment-service | exchange `order.events`, queue `payment.order-events` + binding (`order.created`, `order.cancelled`), DLX + DLQ; exchange `payment.events` | bên nhận `order.events`, bên phát `payment.events` |
 | product-service (kế hoạch) | exchange `product.events` | cần thêm `spring-boot-starter-amqp` + biến môi trường Rabbit trong compose |
 
@@ -86,9 +85,10 @@ Cấu hình bắt buộc (`order-service/application.yml`): `publisher-confirm-t
 ## 6. Consumer (notification-service)
 
 - `@RabbitListener` trên `notification.order-events`, nhận `Message` thô.
-- **Idempotent:** trong một transaction, `INSERT INTO processed_messages ... ON CONFLICT (message_id) DO NOTHING`. Được 0 dòng nghĩa là message trùng: log, ack, bỏ qua. Được 1 dòng thì ghi `notifications` và log `[EMAIL GIẢ LẬP]`. Hai bảng nằm trong cùng một transaction nên không thể có trạng thái "đã đánh dấu mà chưa gửi" hay "đã gửi mà chưa đánh dấu".
+- **Idempotent:** trong một transaction, `INSERT INTO processed_messages ... ON CONFLICT (message_id) DO NOTHING`. Được 0 dòng nghĩa là message trùng: log, ack, bỏ qua. Được 1 dòng thì ghi `notifications`. Hai bảng nằm trong cùng một transaction nên không thể có trạng thái "đã đánh dấu mà chưa gửi" hay "đã gửi mà chưa đánh dấu".
   - Không bắt unique violation: trên PostgreSQL, lỗi bất kỳ làm transaction chuyển sang *aborted*, và Spring đánh dấu rollback-only. Bắt exception rồi `return` vẫn nổ `UnexpectedRollbackException` lúc commit, khiến message trùng bị retry rồi vào DLQ.
-  - Với email thật (không phải log), việc gửi vẫn có thể lặp nếu commit lỗi sau khi đã gửi; khi đó cần thêm outbox phía Notification.
+- **Gửi email sau commit** (`TransactionSynchronization.afterCommit`) qua SMTP tới Mailpit. Commit lỗi thì không có thư "ma"; SMTP lỗi chỉ ghi log (`[EMAIL LỖI]`), không làm retry message. Địa chỉ nhận là `customerEmail` đi kèm payload mọi event `order.*`. Tắt bằng `MAIL_ENABLED=false` (chỉ ghi log `[EMAIL GIẢ LẬP]`).
+  - Hạn chế: tiến trình chết đúng giữa commit và gửi thì mất thư đó (at-most-once cho email). Muốn chắc chắn cần outbox phía Notification.
 - **Retry:** `retry.enabled: true`, `max-retries: 2` (tổng 3 lần), backoff 1s → 2s (tối đa 5s), `default-requeue-rejected: false`. Hết retry thì reject không requeue và message vào DLQ.
   - Spring Boot 4 dùng `max-retries` (số lần thử *lại*); key `max-attempts` cũ không còn và bị **bỏ qua im lặng**.
 - **Message hỏng** (thiếu `message_id`, JSON sai, thiếu `orderId`/`userId`, routing key lạ): ném `AmqpRejectAndDontRequeueException` để vào DLQ ngay.

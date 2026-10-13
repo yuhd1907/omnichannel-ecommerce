@@ -55,6 +55,14 @@ spring:
           initial-interval: 1s
           multiplier: 2
           max-interval: 5s
+  cloud:
+    openfeign:
+      client:
+        config:
+          # Identity khong phan hoi thi fail fast (503), khong giu request tao don qua lau.
+          identity-client:
+            connect-timeout: 5000   # ms
+            read-timeout: 5000      # ms
   grpc:
     client:
       channel:
@@ -97,20 +105,6 @@ order:
 jwt:
   secret: ${JWT_SECRET:404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
 
-# URL các service nội bộ (override bằng env var khi deploy trên Docker/K8s)
+# URL service nội bộ gọi bằng Feign (override bằng env var khi chạy Docker)
 app-clients:
-  product-service-url: ${PRODUCT_SERVICE_URL:http://localhost:8082}
   identity-service-url: ${IDENTITY_SERVICE_URL:http://localhost:8081}
-
-# Feign client timeout — nếu service không phản hồi thì fail fast, không tạo đơn
-feign:
-  client:
-    config:
-      product-client:
-        url: ${PRODUCT_SERVICE_URL:http://localhost:8082}
-        connect-timeout: 5000   # ms
-        read-timeout: 5000      # ms
-      identity-client:
-        url: ${IDENTITY_SERVICE_URL:http://localhost:8081}
-        connect-timeout: 5000
-        read-timeout: 5000

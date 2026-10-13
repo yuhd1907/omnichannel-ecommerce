@@ -2,6 +2,28 @@
 
 Các thao tác vận hành cần làm bằng tay. Lệnh chạy trên máy đang chạy Docker Compose.
 
+## Deploy tự động (CD)
+
+1. Merge vào `main` → GitHub Actions **Docker Build & Push** chạy test, build 6 image, push GHCR với tag `sha-xxxxxxx` và `latest`.
+2. Trên VPS, cron chạy `/home/huy/deploy/auto-deploy.sh` (bản sao của [scripts/auto-deploy.sh](../scripts/auto-deploy.sh)) mỗi 2 phút: `git reset --hard origin/main` + `docker compose pull`. Code hoặc image đổi thì `up -d --remove-orphans`.
+
+```bash
+crontab -l | grep auto-deploy                       # đường dẫn log nằm sau dấu >>
+tail -f /home/huy/deploy/auto-deploy.log            # chờ dòng "deploy: code xxx -> yyy"
+```
+
+Mỗi lần deploy các service khởi động lại 1–3 phút. **Trước buổi demo tạm tắt cron** (lệnh ở [Demo_Script.md](Demo_Script.md) mục 0.1). File `.env` trên VPS không nằm trong git nên `git reset` không đụng tới; biến mới (vd `GRAFANA_ADMIN_PASSWORD`) phải tự thêm trước khi merge.
+
+## Giám sát và công cụ demo
+
+Mailpit, Prometheus, Grafana, RabbitMQ UI chỉ bind `127.0.0.1` trên VPS. Xem từ máy mình qua SSH tunnel (dùng đúng cách SSH thường dùng: WSL, key `-i`, hoặc app có port forwarding):
+
+```bash
+ssh -L 8025:127.0.0.1:8025 -L 3000:127.0.0.1:3000 -L 15672:127.0.0.1:15672 huy@huyecommerce.duckdns.org
+```
+
+Tắt Docker local trước (`docker compose stop`) để cổng 8025/3000 trên máy không bị container local chiếm. Grafana đăng nhập `admin` / `GRAFANA_ADMIN_PASSWORD`; RabbitMQ dùng `RABBITMQ_DEFAULT_USER` / `RABBITMQ_DEFAULT_PASS` trong `.env` của VPS.
+
 ## Outbox event bị FAILED
 
 `OutboxRelay` (order-service) chuyển event sang `FAILED` sau 10 lần gửi lỗi (broker NACK, message bị return vì không có queue nào nhận, hoặc quá 5 giây không có publisher confirm). Event `FAILED` **không tự gửi lại**. Broker chết hẳn thì event vẫn giữ `PENDING`, không bị tính lỗi.
@@ -38,7 +60,7 @@ Relay sẽ gửi lại trong vòng 1 giây. Việc gửi lại an toàn vì cons
 
 ## Message trong DLQ
 
-Message xử lý lỗi sau 3 lần thử, hoặc message hỏng, nằm ở `<queue>.dlq` (ví dụ `notification.order-events.dlq`). Xem bằng Management UI tại http://localhost:15672 → *Queues* → chọn DLQ → *Get messages*. Header `x-death` cho biết lý do. Sau khi sửa lỗi ở consumer, chuyển message về queue gốc bằng *Move messages*. Nút này chỉ có khi đã bật plugin shovel (image mặc định không bật):
+Message xử lý lỗi sau 3 lần thử, hoặc message hỏng, nằm ở `<queue>.dlq` (ví dụ `notification.order-events.dlq`). Xem bằng Management UI tại http://localhost:15672 (VPS: qua SSH tunnel ở trên) → *Queues* → chọn DLQ → *Get messages*. Header `x-death` cho biết lý do. Sau khi sửa lỗi ở consumer, chuyển message về queue gốc bằng *Move messages*. Nút này chỉ có khi đã bật plugin shovel (image mặc định không bật):
 
 ```powershell
 docker exec ecommerce-rabbitmq rabbitmq-plugins enable rabbitmq_shovel rabbitmq_shovel_management
@@ -54,12 +76,18 @@ File cấu hình mẫu lưu tại [deploy/nginx/omnichannel.conf](../deploy/ngin
 
 **1. Áp dụng cấu hình Nginx trên VPS**
 
+File đang chạy trên VPS là `/etc/nginx/sites-available/ecommerce.conf` (Certbot đã ghi vào file này). Khi sửa `deploy/nginx/omnichannel.conf` trong repo, cron deploy **không** tự cập nhật Nginx; phải chép tay:
+
 ```bash
-sudo cp deploy/nginx/omnichannel.conf /etc/nginx/sites-available/omnichannel.conf
-sudo ln -sf /etc/nginx/sites-available/omnichannel.conf /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl reload nginx
+cd /home/huy/omnichannel-ecommerce
+sudo cp /etc/nginx/sites-available/ecommerce.conf ~/ecommerce.conf.bak      # sao lưu
+sudo cp deploy/nginx/omnichannel.conf /etc/nginx/sites-available/ecommerce.conf
+sudo nginx -t && sudo systemctl reload nginx
 ```
+
+Chỉ giữ **một** file bật trong `/etc/nginx/sites-enabled/` cho tên miền này; hai file cùng `server_name` thì Nginx báo `conflicting server name ... ignored` và chỉ dùng file đọc trước. Lỗi thì khôi phục bằng `~/ecommerce.conf.bak`.
+
+Cấu hình chặn mọi `/actuator/*` trừ `/actuator/health` (metrics chỉ Prometheus trong mạng Docker được đọc).
 
 **2. Chứng chỉ SSL Let's Encrypt (DNS-01 qua DuckDNS)**
 
