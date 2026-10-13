@@ -47,7 +47,7 @@ spring:
               uri: ${PAYMENT_URI:http://localhost:8084}
               order: -1
               predicates:
-                - Path=/api/v1/orders/*/payments, /api/v1/webhooks/**, /api/v1/admin/payments/**
+                - Path=/api/v1/orders/*/payments, /api/v1/payments/**, /api/v1/webhooks/**, /api/v1/admin/payments/**
               filters:
                 - name: RequestRateLimiter
                   args:

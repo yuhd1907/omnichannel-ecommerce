@@ -15,6 +15,14 @@ public interface PaymentGatewayAdapter {
     String buildCheckoutUrl(Payment payment);
 
     /**
+     * Như {@link #buildCheckoutUrl(Payment)} nhưng biết IP người mua — một số cổng (VNPAY) bắt
+     * buộc gửi IP khách hàng. Mặc định bỏ qua IP.
+     */
+    default String buildCheckoutUrl(Payment payment, String clientIp) {
+        return buildCheckoutUrl(payment);
+    }
+
+    /**
      * Xác thực chữ ký webhook từ cổng thanh toán.
      *
      * @param body      raw body dạng bytes

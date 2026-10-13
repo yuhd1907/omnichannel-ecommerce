@@ -17,6 +17,16 @@ spring:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_DEFAULT_USER:guest}
+    password: ${RABBITMQ_DEFAULT_PASS:guest}
+    # Giong order-service: OutboxRelay chi markSent khi broker ACK va message vao duoc queue.
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
   grpc:
     server:
       port: ${PRODUCT_GRPC_PORT:9082}
@@ -37,6 +47,11 @@ management:
       # Histogram de Grafana tinh p95/p99 bang histogram_quantile
       percentiles-histogram:
         http.server.requests: true
+  health:
+    rabbit:
+      # Giong order/payment: broker chet thi van xem/tim san pham duoc, event nam trong outbox
+      # cho relay gui lai. Health phu thuoc RabbitMQ se lam Docker danh dau service UNHEALTHY.
+      enabled: false
 
 jwt:
   # Phai giong voi gia tri trong identity-service — doc tu cung bien moi truong JWT_SECRET

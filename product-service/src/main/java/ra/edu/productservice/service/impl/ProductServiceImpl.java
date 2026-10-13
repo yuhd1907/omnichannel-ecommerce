@@ -17,15 +17,18 @@ import ra.edu.productservice.dto.request.UpdateProductRequest;
 import ra.edu.productservice.dto.request.UpdateSkuRequest;
 import ra.edu.productservice.entity.Brand;
 import ra.edu.productservice.entity.Category;
+import ra.edu.productservice.entity.OutboxEvent;
 import ra.edu.productservice.entity.Product;
 import ra.edu.productservice.entity.ProductSku;
 import ra.edu.productservice.exception.ResourceNotFoundException;
 import ra.edu.productservice.exception.SkuAlreadyExistsException;
 import ra.edu.productservice.repository.BrandRepository;
 import ra.edu.productservice.repository.CategoryRepository;
+import ra.edu.productservice.repository.OutboxEventRepository;
 import ra.edu.productservice.repository.ProductRepository;
 import ra.edu.productservice.repository.ProductSkuRepository;
 import ra.edu.productservice.service.ProductService;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.text.Normalizer;
 import java.time.Instant;
@@ -40,6 +43,8 @@ public class ProductServiceImpl implements ProductService {
     private final ProductSkuRepository productSkuRepository;
     private final CategoryRepository categoryRepository;
     private final BrandRepository brandRepository;
+    private final OutboxEventRepository outboxEventRepository;
+    private final JsonMapper jsonMapper;
 
     @Override
     @Transactional(readOnly = true)
@@ -57,6 +62,68 @@ public class ProductServiceImpl implements ProductService {
                 dtoPage.getTotalElements(),
                 dtoPage.getTotalPages()
         );
+    }
+
+    /** Giới hạn số từ khóa để tsquery không phình to (mỗi từ là một điều kiện AND). */
+    static final int MAX_SEARCH_TERMS = 8;
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageData<ProductSummaryDto> searchProducts(String keyword, UUID categoryId, Pageable pageable) {
+        String tsQuery = toPrefixTsQuery(keyword);
+        if (tsQuery == null) {
+            // Từ khóa chỉ toàn ký tự đặc biệt -> coi như không lọc
+            return getProducts(categoryId, pageable);
+        }
+
+        int size = pageable.getPageSize();
+        long offset = pageable.getOffset();
+        List<UUID> ids;
+        long total;
+        if (categoryId != null) {
+            ids = productRepository.searchIdsInCategory(tsQuery, categoryId, size, offset);
+            total = productRepository.countSearchInCategory(tsQuery, categoryId);
+        } else {
+            ids = productRepository.searchIds(tsQuery, size, offset);
+            total = productRepository.countSearch(tsQuery);
+        }
+
+        // findByIdIn không giữ thứ tự -> sắp lại theo thứ tự độ liên quan của ids
+        Map<UUID, Product> byId = new HashMap<>();
+        if (!ids.isEmpty()) {
+            productRepository.findByIdIn(ids).forEach(p -> byId.put(p.getId(), p));
+        }
+        List<ProductSummaryDto> content = ids.stream()
+                .map(byId::get)
+                .filter(Objects::nonNull)
+                .map(ProductSummaryDto::from)
+                .toList();
+
+        int totalPages = size == 0 ? 1 : (int) ((total + size - 1) / size);
+        return new PageData<>(content, pageable.getPageNumber(), size, total, totalPages);
+    }
+
+    /**
+     * Từ khóa người dùng -> tsquery an toàn: tách theo ký tự không phải chữ/số (nên người dùng
+     * không thể chèn toán tử tsquery như ! | ( ) làm lỗi cú pháp), mỗi từ thêm ":*" để khớp tiền
+     * tố, nối bằng "&". Ví dụ "iPhone 15 pro" -> "iphone:* & 15:* & pro:*".
+     *
+     * @return null nếu không còn từ nào hợp lệ.
+     */
+    public static String toPrefixTsQuery(String keyword) {
+        if (keyword == null) {
+            return null;
+        }
+        // NFC: chữ có dấu gõ dạng tổ hợp (e + dấu) gộp lại thành một ký tự \p{L}
+        String normalized = Normalizer.normalize(keyword, Normalizer.Form.NFC).toLowerCase(Locale.ROOT);
+        List<String> terms = Arrays.stream(normalized.split("[^\\p{L}\\p{N}]+"))
+                .filter(t -> !t.isEmpty())
+                .map(t -> t.length() > 50 ? t.substring(0, 50) : t)
+                .distinct()
+                .limit(MAX_SEARCH_TERMS)
+                .map(t -> t + ":*")
+                .toList();
+        return terms.isEmpty() ? null : String.join(" & ", terms);
     }
 
     @Override
@@ -124,6 +191,8 @@ public class ProductServiceImpl implements ProductService {
         }
 
         Product savedProduct = productRepository.save(product);
+        // Cùng transaction với việc tạo SKU: commit thì chắc chắn có event, rollback thì không.
+        savedProduct.getSkus().forEach(sku -> writeSkuCreatedEvent(savedProduct, sku));
         return ProductDetailDto.from(savedProduct);
     }
 
@@ -146,7 +215,27 @@ public class ProductServiceImpl implements ProductService {
                 .build();
 
         ProductSku savedSku = productSkuRepository.save(sku);
+        writeSkuCreatedEvent(product, savedSku);
         return ProductSkuDto.from(savedSku);
+    }
+
+    /**
+     * Ghi event PRODUCT_SKU_CREATED vào outbox (Transactional Outbox). OutboxRelay publish lên
+     * exchange product.events; order-service nhận và tạo dòng kho available_qty = 0 cho SKU,
+     * admin chỉ còn việc nhập số lượng.
+     */
+    private void writeSkuCreatedEvent(Product product, ProductSku sku) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("skuCode", sku.getSkuCode());
+        payload.put("productId", product.getId());
+        payload.put("productName", product.getName());
+        payload.put("price", sku.getPrice());
+        outboxEventRepository.save(OutboxEvent.builder()
+                .aggregateType("Product")
+                .aggregateId(product.getId())
+                .eventType("PRODUCT_SKU_CREATED")
+                .payload(jsonMapper.writeValueAsString(payload))
+                .build());
     }
 
     @Override

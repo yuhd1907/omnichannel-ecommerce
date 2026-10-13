@@ -10,6 +10,7 @@ Ký hiệu: **[VPS]** là lệnh bash chạy trên VPS (prompt `huy@azvps-...`),
 | --- | --- | --- | --- |
 | 1 | Tổng quan: đã làm / chưa làm, kiến trúc | 3–4 phút | [Project_Overview.md](Project_Overview.md), `architecture.png` |
 | 2 | Swagger — tài liệu API | 1 phút | `/swagger-ui.html` |
+| 2b | Phần mở rộng: tìm kiếm, `Idempotency-Key`, VNPAY sandbox | 3 phút | Trình duyệt, Swagger / Postman |
 | 3 | S1 — đặt hàng, thanh toán thành công | 3 phút | Postman folder 3, Mailpit, `saga-check.sql` |
 | 4 | S2 — thanh toán thất bại, trả kho | 2 phút | Postman folder 4, Mailpit |
 | 5 | S3 — admin giao hàng | 2 phút | Postman folder 5, Mailpit |
@@ -89,13 +90,22 @@ Mở [Project_Overview.md](Project_Overview.md) (xem trên GitHub cho đẹp). T
 4. **Đã làm được** (mục 3): chỉ đọc tiêu đề 5 nhóm, nói "phần demo sẽ chứng minh từng nhóm".
 5. **Chưa làm được** (mục 4): nói thẳng và nêu lý do. Ba điểm hội đồng hay hỏi:
    - không có giao diện, demo bằng API;
-   - thanh toán MOCK;
-   - không dùng MongoDB/Elasticsearch.
+   - thanh toán thật mới ở mức VNPAY sandbox;
+   - không dùng MongoDB/Elasticsearch (tìm kiếm bằng `tsvector`).
 6. Chuyển sang demo: "Giờ em chứng minh các phần trên chạy thật trên VPS."
 
 ## 2. Swagger (1 phút)
 
 Mở `/swagger-ui.html`, đổi qua lại 4 service ở ô **Select a definition** góc phải. Bấm **Authorize**, dán `userToken`, thử `GET /api/v1/orders`. Điểm cần nói: spec do từng service tự sinh, gateway chỉ gom lại; "Try it out" vẫn đi qua gateway nên vẫn qua JWT và rate limit.
+
+## 2b. Phần mở rộng: tìm kiếm, Idempotency-Key, VNPAY (3 phút)
+
+Dùng Swagger (đã Authorize) hoặc Postman (biến `userToken`, `addressId` có sẵn sau folder 1–2).
+
+1. **Tìm kiếm toàn văn** (public, mở thẳng trên trình duyệt):
+   `https://huyecommerce.duckdns.org/api/v1/products?q=dien thoai` (không dấu) rồi `?q=iph` (gõ dở) → vẫn ra kết quả. Nói: cột `search_vector` generated + GIN index, `unaccent`, mỗi từ khớp tiền tố.
+2. **Idempotency-Key:** gửi `POST /api/v1/orders` kèm header `Idempotency-Key: demo-key-1` → `201`. Gửi lại **y hệt** → `200`, header `Idempotent-Replayed: true`, cùng `id` đơn, kho không bị trừ lần hai. Đổi `quantity` mà giữ key → `422 IDEMPOTENCY_KEY_REUSED`. (Mỗi buổi demo đổi key mới.)
+3. **VNPAY sandbox** (nếu đã cấu hình): `POST /api/v1/orders/{orderId}/payments` với `{"method":"VNPAY"}` → copy `checkoutUrl` mở trên trình duyệt → thẻ test NCB `9704198526191432198`, tên `NGUYEN VAN A`, ngày phát hành `07/15`, OTP `123456` (đối chiếu với thẻ test trong email đăng ký sandbox). Sau khi trả tiền trình duyệt về return URL, hiện JSON `{orderId, result: "SUCCESS"}`; `GET /api/v1/orders/{orderId}` → `CONFIRMED / PAID`. Log: `docker logs ecommerce-payment-service 2>&1 | grep VNPAY`.
 
 ## 3. S1 — Đặt hàng và thanh toán thành công (3 phút)
 
@@ -194,7 +204,10 @@ Nói lý do không dùng SSH-push: nhà cung cấp VPS chặn kết nối quốc
 | Chịu 1000 req/s mà sao chỉ bán khoảng 30 đơn/giây? | Mọi đơn mua cùng một SKU nên phải đi tuần tự qua khóa kho; đó là cái giá của "không bán vượt". Request chờ quá 3 giây nhận `409 INVENTORY_BUSY` để client thử lại, không treo. Muốn nhanh hơn: chia kho một SKU thành nhiều dòng, hoặc xếp hàng đơn qua queue. |
 | Event gửi 2 lần thì sao? | Consumer idempotent: notification ghi `processed_messages(messageId)` cùng transaction; payment có `order_id UNIQUE`, `gateway_txn_id UNIQUE`. |
 | Sao không publish thẳng lên RabbitMQ? | DB commit mà broker chết thì mất event (hoặc ngược lại). Outbox ghi cùng transaction, relay gửi sau, có publisher confirm. Demo mục 7. |
-| Thanh toán thật? | MOCK sau interface `PaymentGatewayAdapter`; cổng thật cần merchant và URL webhook nhận được kết nối quốc tế (Scope_Adjustments mục 8). |
+| Thanh toán thật? | VNPAY sandbox qua `VnpayAdapter` (ký HMAC-SHA512, IPN + return URL), cùng interface `PaymentGatewayAdapter` với MOCK; cả hai đi chung một hàm áp kết quả có chống lặp. Môi trường thật chỉ khác TMN code / secret (Scope_Adjustments mục 8). |
+| Người dùng bấm "Đặt hàng" 2 lần / mạng chập chờn? | Client gửi `Idempotency-Key` (UUID mỗi lần bấm, giữ nguyên khi gửi lại). Server lưu key cùng transaction với đơn; gửi lại → trả đúng đơn cũ, không giữ kho lần hai. Hai request trùng key song song: bên sau chờ ở khóa chính rồi nhận đơn của bên trước. |
+| Chạy 2 instance order-service thì relay có gửi trùng? | Không: mỗi relay nhận lô bằng `SELECT ... FOR UPDATE SKIP LOCKED` + `locked_until`, hai instance nhận hai lô khác nhau; instance chết thì hết 60 giây lô tự được nhận lại (Messaging_Topology 5.1). |
+| Tìm kiếm làm thế nào? | `tsvector` generated column + GIN index, bỏ dấu bằng `unaccent`, mỗi từ khớp tiền tố (`iph` → iPhone). Elasticsearch để sau, sẽ đồng bộ bằng event `product.*`. |
 | Sao gộp Inventory vào Order? | Giữ hàng phải nguyên tử với tạo đơn; tách ra thành giao dịch phân tán (Scope_Adjustments 3.3). |
 | Tiền về sau khi đơn bị hủy? | Đơn không hồi sinh vì hàng đã trả kho cho người khác; payment đánh dấu `needs_refund` để đối soát thủ công. |
 

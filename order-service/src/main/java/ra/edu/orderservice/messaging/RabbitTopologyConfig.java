@@ -11,8 +11,10 @@ import java.util.List;
 /**
  * Topology RabbitMQ phía order-service (xem docs/Messaging_Topology.md).
  *
- * Bên phát: exchange order.events. Bên nhận: queue order.payment-events (+ DLX/DLQ) bind vào
- * payment.events. Khai báo lặp exchange payment.events an toàn vì tham số giống payment-service.
+ * Bên phát: exchange order.events. Bên nhận:
+ *  - queue order.payment-events (+ DLX/DLQ) bind vào payment.events (kết quả thanh toán);
+ *  - queue order.product-events (+ DLX/DLQ) bind vào product.events (SKU mới -> tạo dòng kho).
+ * Khai báo lặp exchange của bên phát an toàn vì tham số giống hệt.
  *
  * DLX là fanout riêng cho queue: message bị dead-letter GIỮ routing key gốc (payment.succeeded);
  * với direct DLX bind bằng key khác, message sẽ bị drop im lặng.
@@ -31,6 +33,13 @@ public class RabbitTopologyConfig {
 
     public static final String RK_PAYMENT_SUCCEEDED = "payment.succeeded";
     public static final String RK_PAYMENT_FAILED    = "payment.failed";
+
+    public static final String PRODUCT_EVENTS_EXCHANGE = "product.events";
+    public static final String RK_PRODUCT_SKU_CREATED  = "product.sku.created";
+
+    public static final String PRODUCT_QUEUE = "order.product-events";
+    public static final String PRODUCT_DLX   = PRODUCT_QUEUE + ".dlx";
+    public static final String PRODUCT_DLQ   = PRODUCT_QUEUE + ".dlq";
 
     public static final String PAYMENT_QUEUE = "order.payment-events";
     public static final String PAYMENT_DLX   = PAYMENT_QUEUE + ".dlx";
@@ -75,6 +84,38 @@ public class RabbitTopologyConfig {
     @Bean
     public Binding orderPaymentEventsDlqBinding() {
         return BindingBuilder.bind(orderPaymentEventsDlq()).to(orderPaymentEventsDlx());
+    }
+
+    // ── product.events -> order.product-events ───────────────────────────────
+
+    @Bean
+    public TopicExchange productEventsExchange() {
+        return ExchangeBuilder.topicExchange(PRODUCT_EVENTS_EXCHANGE).durable(true).build();
+    }
+
+    @Bean
+    public Queue orderProductEventsQueue() {
+        return QueueBuilder.durable(PRODUCT_QUEUE).deadLetterExchange(PRODUCT_DLX).build();
+    }
+
+    @Bean
+    public Binding productSkuCreatedBinding() {
+        return BindingBuilder.bind(orderProductEventsQueue()).to(productEventsExchange()).with(RK_PRODUCT_SKU_CREATED);
+    }
+
+    @Bean
+    public FanoutExchange orderProductEventsDlx() {
+        return ExchangeBuilder.fanoutExchange(PRODUCT_DLX).durable(true).build();
+    }
+
+    @Bean
+    public Queue orderProductEventsDlq() {
+        return QueueBuilder.durable(PRODUCT_DLQ).build();
+    }
+
+    @Bean
+    public Binding orderProductEventsDlqBinding() {
+        return BindingBuilder.bind(orderProductEventsDlq()).to(orderProductEventsDlx());
     }
 
     /**

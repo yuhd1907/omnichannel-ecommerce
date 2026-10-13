@@ -66,3 +66,10 @@ app:
   payment:
     webhook-secret: ${PAYMENT_WEBHOOK_SECRET:dev-webhook-secret-key-12345}
     public-base-url: ${PAYMENT_PUBLIC_BASE_URL:http://localhost:8084}
+    # VNPAY sandbox: dang ky tai https://sandbox.vnpayment.vn/devreg/ de lay TMN code + hash secret.
+    # De trong -> chon VNPAY khi thanh toan tra 503 PAYMENT_GATEWAY_NOT_CONFIGURED.
+    vnpay:
+      tmn-code: ${VNPAY_TMN_CODE:}
+      hash-secret: ${VNPAY_HASH_SECRET:}
+      pay-url: ${VNPAY_PAY_URL:https://sandbox.vnpayment.vn/paymentv2/vpcpay.html}
+      return-url: ${VNPAY_RETURN_URL:http://localhost:8080/api/v1/payments/vnpay/return}

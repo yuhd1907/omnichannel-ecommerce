@@ -70,10 +70,13 @@ Các bảng quan hệ dùng PostgreSQL, Flyway migrations và `NOT NULL` cho c�
 | --- | --- | --- |
 | `categories` | `id`, `name`, `slug`, `parent_id` | unique `slug`; FK `parent_id` nullable tự tham chiếu |
 | `brands` | `id`, `name`, `slug` | unique `slug` |
-| `products` | `id`, `name`, `slug`, `description`, `category_id`, `brand_id`, `base_price`, `status`, `created_at`, `updated_at` | unique `slug`; FK nội bộ; index `category_id`, `brand_id` |
+| `products` | `id`, `name`, `slug`, `description`, `category_id`, `brand_id`, `base_price`, `status`, `created_at`, `updated_at`, `search_vector` | unique `slug`; FK nội bộ; index `category_id`, `brand_id`; `search_vector tsvector GENERATED ALWAYS ... STORED` + GIN index (V5) |
+| `outbox_events` | các cột theo quy ước trên + `locked_until` | index `(status, created_at)`; phát `PRODUCT_SKU_CREATED` (V4) |
 | `product_skus` | `id`, `product_id`, `sku_code`, `attributes jsonb`, `price`, `image_url`, `updated_at` | unique `sku_code`; FK `product_id`; giá không âm |
 
-`product_skus.sku_code` được công bố qua `ProductSkuCreated`. Consumer trong Order **chỉ INSERT nếu chưa có** `inventory(sku_code, available_qty=0, reserved_qty=0, version=0)`; event lặp không được reset tồn kho. Cần backfill SKU cũ khi bật tích hợp lần đầu. Tìm kiếm full-text/Elasticsearch là phần mở rộng nếu còn thời gian.
+`product_skus.sku_code` được công bố qua event `product.sku.created` (outbox của product). Consumer trong Order **chỉ INSERT nếu chưa có** `inventory(sku_code, available_qty=0, reserved_qty=0, version=0)` (`ON CONFLICT DO NOTHING`); event lặp không reset tồn kho. SKU mẫu có sẵn được backfill bằng migration `order-service/V4__seed_inventory_sample_skus.sql`.
+
+**Tìm kiếm toàn văn:** `search_vector = setweight(tên, 'A') || setweight(mô tả, 'C')`, cấu hình `simple` (không stemming, Postgres không có từ điển tiếng Việt) trên chuỗi đã bỏ dấu bằng `unaccent` (bọc trong hàm `immutable_unaccent` để dùng được trong cột generated). Từ khóa được tách thành từ, mỗi từ thêm `:*` (khớp tiền tố) nối bằng `&`, sắp theo `ts_rank`. Elasticsearch để giai đoạn sau.
 
 ### 2.3 `order_db` — PostgreSQL (Order & Inventory chung một DB)
 
@@ -82,7 +85,8 @@ Các bảng quan hệ dùng PostgreSQL, Flyway migrations và `NOT NULL` cho c�
 | `inventory` | `id`, `sku_code`, `available_qty`, `reserved_qty`, `version` | unique `sku_code`; CHECK hai số lượng không âm; `version` cho optimistic locking |
 | `orders` | `id`, `user_id`, `channel`, `status`, `payment_status`, `total_amount`, `shipping_recipient_name`, `shipping_phone`, `shipping_address`, `created_at`, `updated_at` | index `(user_id, created_at DESC)` và `(status, created_at)`; snapshot địa chỉ; **không** FK user sang Identity |
 | `order_items` | `id`, `order_id`, `sku_code`, `product_name`, `unit_price`, `quantity`, `subtotal` | FK `order_id`, index `order_id`; `quantity>0`, `unit_price>=0`; `subtotal=unit_price×quantity` |
-| `outbox_events` | các cột theo quy ước trên | index `(status, created_at)` cho worker |
+| `outbox_events` | các cột theo quy ước trên + `locked_until` | index `(status, created_at)` cho worker; `locked_until` cho relay nhiều instance (`SKIP LOCKED`) |
+| `idempotency_keys` | `user_id`, `idem_key`, `request_hash`, `order_id`, `created_at` | PK `(user_id, idem_key)`; ghi cùng transaction với đơn (V3) |
 
 `orders.status`: `PENDING`, `CONFIRMED`, `SHIPPING`, `COMPLETED`, `CANCELLED`. `orders.payment_status`: `UNPAID`, `PAID`, `FAILED`. `orders.channel`: `WEB`, `MOBILE`; đây là kênh client khai khi tạo đơn, không phải vị trí kho. Migration đặt CHECK giới hạn hai giá trị này. Không có `location_id`, `reservation_id`, `stock_movements` hay bảng `reservations`. `orders.total_amount` bằng tổng item subtotal trong MVP.
 
@@ -103,7 +107,7 @@ Trong transaction, gộp item trùng SKU, xử lý SKU theo thứ tự cố đ�
 | --- | --- | --- |
 | `payments` | `id`, `order_id`, `amount`, `method`, `status`, `created_at`, `updated_at` | unique `order_id`: một payment/đơn; `status=PENDING/SUCCESS/FAILED` |
 | `payment_transactions` | `id`, `payment_id`, `gateway_txn_id`, `raw_response jsonb`, `status`, `created_at` | FK `payment_id`; unique `gateway_txn_id` khi có; `status=PENDING/SUCCESS/FAILED` cho từng lần thử |
-| `outbox_events` | các cột theo quy ước trên | index `(status, created_at)` cho worker |
+| `outbox_events` | các cột theo quy ước trên + `locked_until` | index `(status, created_at)` cho worker |
 
 Không có bảng `payment_attempts`, `webhook_inbox`, `refunds`; các lần thử và phản hồi đã xác minh lưu ở `payment_transactions`. Webhook: kiểm chữ ký, dùng `gateway_txn_id UNIQUE`, khóa/điều kiện trạng thái `payments.status=PENDING`, ghi transaction + cập nhật payment + outbox trong cùng transaction. Webhook lặp phải trả thành công phù hợp provider nhưng không phát event lần hai; nếu INSERT gặp xung đột unique, đọc giao dịch đã lưu và kiểm tra kết quả trước khi trả lời. Nếu gateway ID chỉ duy nhất **trong từng provider**, cần unique `(method, gateway_txn_id)` sau khi đưa `method` vào bảng transaction; phạm vi MVP giả định ID duy nhất toàn hệ thống. Hoàn tiền để giai đoạn sau.
 
@@ -128,22 +132,26 @@ Base path `/api/v1`; JWT cho người dùng, `ADMIN` cho quản trị. JSON `cam
 | Identity | `GET /users/me` | user | — | `200 UserView` gồm hồ sơ người dùng hiện tại |
 | Identity | `GET /users/me/addresses` | user | — | `200 AddressView[]` |
 | Identity | `POST /users/me/addresses` | user | `recipientName,phone,addressLine,ward,district,city,isDefault` | `201 AddressView` |
-| Product Catalog | `GET /products?categoryId=&page=0&size=20` | public | query params | `200 Page<ProductSummary>` |
+| Product Catalog | `GET /products?q=&categoryId=&page=0&size=20` | public | query params | `200 Page<ProductSummary>`; có `q` thì tìm toàn văn, sắp theo độ liên quan |
 | Product Catalog | `GET /products/{id}` | public | — | `200 ProductDetail` gồm SKUs |
 | Product Catalog | `POST /admin/products` | admin | product + SKU DTO | `201 ProductDetail`; `409 SKU_EXISTS` |
-| Product Catalog | `POST /admin/products/{id}/skus` | admin | `skuCode,attributes,price,imageUrl` | `201 SkuView`; Ngày 10 phát `ProductSkuCreated` |
-| Order & Inventory | `POST /orders` | user | `channel=WEB/MOBILE,addressId,items:[{skuCode,quantity}]` | `201 OrderView`; `400 INVALID_CHANNEL`, `409 OUT_OF_STOCK`, `422 SKU_UNAVAILABLE` |
+| Product Catalog | `POST /admin/products/{id}/skus` | admin | `skuCode,attributes,price,imageUrl` | `201 SkuView`; phát `product.sku.created` (cả khi tạo sản phẩm kèm SKU) |
+| Order & Inventory | `POST /orders` | user | `channel=WEB/MOBILE,addressId,items:[{skuCode,quantity}]`; header tùy chọn `Idempotency-Key` (≤ 100 ký tự) | `201 OrderView`; gửi lại cùng key → `200` + header `Idempotent-Replayed: true` (đơn cũ); `400 INVALID_CHANNEL`, `409 OUT_OF_STOCK`, `422 SKU_UNAVAILABLE`, `422 IDEMPOTENCY_KEY_REUSED` |
 | Order & Inventory | `GET /orders/{id}` | owner/admin | — | `200 OrderView`; `404` nếu không thuộc user |
 | Order & Inventory | `GET /orders?page=0&size=20` | user | — | `200 Page<OrderSummary>` sắp theo `created_at DESC` |
 | Order & Inventory | `POST /orders/{id}/cancel` | owner/admin | `reason` | `200 OrderView`; `409 ORDER_NOT_CANCELLABLE` |
 | Order & Inventory | `PATCH /admin/orders/{id}/status` | admin | `status=SHIPPING/COMPLETED` | `200`; chỉ với đơn đủ điều kiện |
 | Order & Inventory | `GET /admin/inventory/{skuCode}` | admin | — | `200 {skuCode,availableQty,reservedQty,version}` |
 | Order & Inventory | `POST /admin/inventory/{skuCode}/adjustments` | admin | `delta,reason` | `200 StockView`; không cho số lượng âm |
-| Payment | `POST /orders/{orderId}/payments` | owner | `method` | `201 PaymentView` gồm checkout URL; unique order/payment |
+| Payment | `POST /orders/{orderId}/payments` | owner | `method=MOCK/VNPAY` | `201 PaymentView` gồm checkout URL; `409 PAYMENT_NOT_READY` (event chưa tới, thử lại); `503 PAYMENT_GATEWAY_NOT_CONFIGURED` (VNPAY chưa cấu hình) |
 | Payment | `GET /orders/{orderId}/payments` | owner/admin | — | `200 PaymentView` |
 | Payment | `POST /webhooks/payments/{method}` | provider | raw body + chữ ký | `2xx` sau khi xác minh/lưu; lỗi chữ ký `400/401` |
+| Payment | `GET /payments/vnpay/ipn` | VNPAY (public, ký HMAC-SHA512) | tham số `vnp_*` | `200 {"RspCode","Message"}`: `00` thành công, `02` đã xử lý, `01` không có đơn, `04` sai số tiền, `97` sai chữ ký |
+| Payment | `GET /payments/vnpay/return` | trình duyệt (public, ký) | tham số `vnp_*` | `200 {orderId, result=SUCCESS/FAILED/INVALID_SIGNATURE/...}` (áp kết quả nếu IPN chưa về) |
 
-Khi `POST /orders`, Order service lấy `userId` từ JWT, đọc địa chỉ thuộc user từ Identity và SKU/giá/tên từ Product Catalog rồi **copy** sang đơn. Không tin giá, tổng tiền hoặc địa chỉ text do client tự gửi. **Client gửi `channel` trong request body**; Order service chỉ chấp nhận `WEB` hoặc `MOBILE` và trả `400 INVALID_CHANNEL` cho giá trị khác. Server không xác minh được client thực sự là website hay app: client có thể khai sai kênh; đây là giới hạn của MVP. Nếu SKU chưa được đồng bộ sang `inventory`, trả lỗi/ghi nhận để đồng bộ; không tự tạo dòng inventory với tồn tùy ý. API Order không có `locationId` hoặc `/internal/reservations`.
+Khi `POST /orders`, Order service lấy `userId` từ JWT, đọc địa chỉ thuộc user từ Identity và SKU/giá/tên từ Product Catalog rồi **copy** sang đơn. Không tin giá, tổng tiền hoặc địa chỉ text do client tự gửi. **Client gửi `channel` trong request body**; Order service chỉ chấp nhận `WEB` hoặc `MOBILE` và trả `400 INVALID_CHANNEL` cho giá trị khác. Server không xác minh được client thực sự là website hay app: client có thể khai sai kênh; đây là giới hạn của MVP. Nếu SKU chưa có dòng `inventory`, coi như hết hàng (`409 OUT_OF_STOCK`); không tự tạo dòng inventory với tồn tùy ý.
+
+**Idempotency-Key:** server kiểm tra key trước mọi lời gọi mạng; key mới thì ghi `idempotency_keys` ngay sau khi lưu đơn, **trước** khi giữ kho, trong cùng transaction. Hai request trùng key chạy song song: request sau chờ ở khóa chính, thấy xung đột (`ON CONFLICT DO NOTHING` trả 0) thì rollback đơn của mình và trả đơn của request trước. Đơn thất bại (hết hàng...) rollback cả key, nên gửi lại là một lần thử mới. `request_hash` = SHA-256 của kênh + địa chỉ + danh sách SKU đã gộp/sắp xếp. API Order không có `locationId` hoặc `/internal/reservations`.
 
 *Ghi chú gRPC & REST internal (G02/G5):* Giao tiếp Order → Product ưu tiên qua gRPC (`ProductInternalService.BatchGetSkus`). REST endpoint `/internal/skus/{skuCode}` trên `product-service` vẫn được duy trì nhằm phục vụ debug bằng curl khi cần đối chiếu hiệu năng, và được bảo đảm không lộ qua API Gateway.
 

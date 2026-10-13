@@ -28,10 +28,10 @@ Hệ thống thương mại điện tử đa kênh (Web / Mobile) theo kiến tr
 | Ngôn ngữ / framework | Java 17, Spring Boot 4.1.1, Gradle 9.7.1 (multi-module) |
 | API Gateway | Spring Cloud Gateway (WebFlux) 2025.1.3, rate limit bằng Redis, Swagger UI gom 4 service |
 | Giao tiếp đồng bộ | REST (JSON), OpenFeign, **gRPC** (Protobuf) |
-| Giao tiếp bất đồng bộ | RabbitMQ 3.13, Transactional Outbox (publisher confirm), consumer idempotent, DLQ |
-| Database | PostgreSQL 16, Flyway migration — database per service |
+| Giao tiếp bất đồng bộ | RabbitMQ 3.13, Transactional Outbox (publisher confirm, `FOR UPDATE SKIP LOCKED` cho nhiều instance), consumer idempotent, DLQ |
+| Database | PostgreSQL 16, Flyway migration — database per service; tìm kiếm toàn văn bằng `tsvector` + `unaccent` |
 | Cache / lock | Redis 7, Redisson (khóa phân tán theo `sku_code` khi giữ hàng) |
-| Bảo mật | JWT (HS512, jjwt 0.13), RBAC `USER` / `ADMIN`, webhook ký HMAC-SHA256 |
+| Bảo mật | JWT (HS512, jjwt 0.13), RBAC `USER` / `ADMIN`, webhook ký HMAC-SHA256, VNPAY ký HMAC-SHA512, `Idempotency-Key` khi đặt hàng |
 | Giám sát | Micrometer + Prometheus + Grafana (dashboard có sẵn) |
 | Email | SMTP tới Mailpit (hộp thư giả lập) |
 | Đóng gói / CI-CD | Docker multi-stage, Docker Compose, GitHub Actions → GHCR, VPS tự kéo image |
@@ -43,9 +43,9 @@ Hệ thống thương mại điện tử đa kênh (Web / Mobile) theo kiến tr
 | --- | --- | --- | --- |
 | `api-gateway` | 8080 | — | Định tuyến, xác thực JWT, rate limit, Swagger UI |
 | `identity-service` | 8081 | `identity_db` | Đăng ký, đăng nhập, refresh token, địa chỉ giao hàng |
-| `product-service` | 8082 (REST), 9082 (gRPC) | `product_db` | Catalog, quản trị sản phẩm, gRPC `GetSku` / `BatchGetSkus` |
-| `order-service` | 8083 | `order_db` | Đặt / hủy đơn, giữ hàng nguyên tử, vòng đời giao hàng, quản trị tồn kho, hủy đơn quá hạn |
-| `payment-service` | 8084 | `payment_db` | Phiên thanh toán (MOCK), webhook HMAC, chống webhook lặp |
+| `product-service` | 8082 (REST), 9082 (gRPC) | `product_db` | Catalog, tìm kiếm toàn văn, quản trị sản phẩm, gRPC `GetSku` / `BatchGetSkus`, outbox `product.sku.created` |
+| `order-service` | 8083 | `order_db` | Đặt / hủy đơn (`Idempotency-Key`), giữ hàng nguyên tử, vòng đời giao hàng, quản trị tồn kho, tự tạo dòng kho cho SKU mới, hủy đơn quá hạn |
+| `payment-service` | 8084 | `payment_db` | Phiên thanh toán (MOCK, VNPAY sandbox), webhook / IPN có chữ ký, chống webhook lặp |
 | `notification-service` | 8085 | `notification_db` | Nhận event đơn hàng, lưu thông báo, gửi email |
 
 Module dùng chung: `common` (envelope response, mã lỗi, JWT filter) và `grpc-api` (file `.proto` + stub sinh tự động).
@@ -78,6 +78,18 @@ curl.exe -s http://localhost:8080/actuator/health                               
 curl.exe -s -o NUL -w "%{http_code}`n" http://localhost:8080/api/v1/products     # 200 (public)
 curl.exe -s -o NUL -w "%{http_code}`n" http://localhost:8080/api/v1/orders       # 401 (cần JWT)
 ```
+
+**VNPAY sandbox (tùy chọn):** đăng ký miễn phí tại https://sandbox.vnpayment.vn/devreg/, nhận TMN code + hash secret qua email, đặt vào `.env`:
+
+```
+VNPAY_TMN_CODE=...
+VNPAY_HASH_SECRET=...
+VNPAY_RETURN_URL=http://localhost:8080/api/v1/payments/vnpay/return
+```
+
+Trên VPS thay `http://localhost:8080` bằng `https://<domain>`.
+
+rồi `docker compose up -d payment-service`. Trên trang quản trị merchant sandbox, khai IPN URL `https://<domain>/api/v1/payments/vnpay/ipn` (chạy local thì VNPAY không gọi được IPN; return URL tự áp kết quả sau khi kiểm chữ ký). Không cấu hình thì chỉ dùng được MOCK.
 
 Lệnh thường dùng:
 
@@ -144,9 +156,9 @@ Năm database được tạo bởi [docker/postgres/init-databases.sql](docker/p
 .
 ├── api-gateway/              # Spring Cloud Gateway: route, JWT filter, rate limit, Swagger UI
 ├── identity-service/
-├── product-service/          # REST + gRPC server
+├── product-service/          # REST + gRPC server, tìm kiếm tsvector, outbox relay
 ├── order-service/            # Order & Inventory (chung order_db), outbox relay
-├── payment-service/          # thanh toán MOCK, webhook, outbox relay
+├── payment-service/          # thanh toán MOCK + VNPAY sandbox, webhook / IPN, outbox relay
 ├── notification-service/     # consumer RabbitMQ, gửi email
 ├── common/                   # ApiResponse, ErrorCode, JWT filter dùng chung
 ├── grpc-api/                 # product_internal.proto → stub Java

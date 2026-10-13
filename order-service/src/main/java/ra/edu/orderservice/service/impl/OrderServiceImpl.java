@@ -22,6 +22,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.domain.PageRequest;
 import ra.edu.common.response.PageData;
+import ra.edu.orderservice.dto.CreateOrderResult;
 import ra.edu.orderservice.dto.OrderDto;
 import ra.edu.orderservice.dto.OrderSummaryDto;
 import ra.edu.orderservice.dto.request.CreateOrderRequest;
@@ -37,6 +38,9 @@ import ra.edu.orderservice.service.OrderService;
 import ra.edu.orderservice.service.OrderStateService;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -64,7 +68,8 @@ public class OrderServiceImpl implements OrderService {
     private long waitTimeSeconds = 3;
 
     @Override
-    public OrderDto createOrder(UUID userId, String customerEmail, CreateOrderRequest request) {
+    public CreateOrderResult createOrder(UUID userId, String customerEmail, CreateOrderRequest request,
+                                         String idempotencyKey) {
 
         // ── 1. Validate channel (ngoài transaction) ─────────────────────────
         String channel = request.channel().toUpperCase();
@@ -82,6 +87,18 @@ public class OrderServiceImpl implements OrderService {
                         CreateOrderRequest.OrderItemRequest::quantity,
                         Long::sum,          // gộp quantity nếu trùng skuCode
                         TreeMap::new));     // TreeMap: sort lexicographic, cố định thứ tự
+
+        // ── 2b. Idempotency-Key: key đã dùng thì trả lại đơn cũ, không làm gì thêm ─────
+        //    Kiểm tra TRƯỚC mọi lời gọi mạng và trước bước từ chối sớm: client gửi lại sau khi
+        //    hàng đã hết vẫn phải nhận lại đúng đơn đã đặt thành công, không phải 409.
+        String requestHash = idempotencyKey == null ? null
+                : requestHash(channel, request.addressId(), skuQuantityMap);
+        if (idempotencyKey != null) {
+            Optional<CreateOrderResult> replay = findReplay(userId, idempotencyKey, requestHash);
+            if (replay.isPresent()) {
+                return replay.get();
+            }
+        }
 
         // ── 3. Từ chối sớm khi CHẮC CHẮN hết hàng (đọc không khóa) ─────────
         //    Flash sale: phần lớn request đến sau khi kho về 0. Chặn ở đây thì không tốn
@@ -170,6 +187,13 @@ public class OrderServiceImpl implements OrderService {
             Order savedOrder = transactionTemplate.execute(status -> {
                 Order persistedOrder = orderRepository.save(order);
 
+                // Ghi Idempotency-Key ngay sau khi có id đơn, TRƯỚC khi khóa dòng kho: request trùng
+                // key chạy song song sẽ chờ ở đây (khóa chính) chứ không giữ khóa kho của SKU.
+                if (idempotencyKey != null && orderRepository.insertIdempotencyKey(
+                        userId, idempotencyKey, requestHash, persistedOrder.getId()) == 0) {
+                    throw new DuplicateIdempotencyKey();   // rollback đơn vừa ghi
+                }
+
                 // Reserve inventory: conditional UPDATE cho từng SKU
                 for (Map.Entry<String, Long> entry : skuQuantityMap.entrySet()) {
                     String skuCode  = entry.getKey();
@@ -200,7 +224,12 @@ public class OrderServiceImpl implements OrderService {
             });
 
             log.info("Order created: id={}, userId={}, total={}", savedOrder.getId(), userId, totalAmount);
-            return toDto(savedOrder);
+            return new CreateOrderResult(toDto(savedOrder), false);
+        } catch (DuplicateIdempotencyKey e) {
+            // Request khác cùng key đã commit trong lúc request này đang xử lý -> trả đơn của nó.
+            log.info("Concurrent request with same Idempotency-Key, returning existing order (userId={})", userId);
+            return findReplay(userId, idempotencyKey, requestHash)
+                    .orElseThrow(() -> new IllegalStateException("Idempotency key vanished: " + idempotencyKey));
         } finally {
             // ── 9. Nhả lock trong finally sau khi transaction đã commit hoàn tất ──
             if (lock != null && lock.isHeldByCurrentThread()) {
@@ -210,6 +239,43 @@ public class OrderServiceImpl implements OrderService {
                     log.warn("Failed to unlock inventory lock: {}", e.getMessage());
                 }
             }
+        }
+    }
+
+    /** Báo hiệu key đã được request khác ghi; ném trong transaction để rollback đơn của request này. */
+    private static final class DuplicateIdempotencyKey extends RuntimeException {
+        DuplicateIdempotencyKey() {
+            super(null, null, false, false);   // không cần stack trace
+        }
+    }
+
+    /**
+     * Key đã dùng: cùng nội dung -> trả lại đơn cũ; khác nội dung -> 422 (client dùng lại key
+     * cho một đơn khác, nhiều khả năng là bug phía client).
+     */
+    private Optional<CreateOrderResult> findReplay(UUID userId, String idempotencyKey, String requestHash) {
+        return orderRepository.findIdempotencyRecord(userId, idempotencyKey).map(record -> {
+            if (!record.getRequestHash().equals(requestHash)) {
+                throw new BusinessException(
+                        ErrorCode.IDEMPOTENCY_KEY_REUSED,
+                        "Idempotency-Key was already used for a different order request",
+                        HttpStatus.UNPROCESSABLE_ENTITY);
+            }
+            Order existing = orderRepository.findWithItemsById(record.getOrderId())
+                    .orElseThrow(() -> new IllegalStateException("Order of idempotency key not found: " + record.getOrderId()));
+            log.info("Idempotent replay: key reused, returning order {} (userId={})", existing.getId(), userId);
+            return new CreateOrderResult(toDto(existing), true);
+        });
+    }
+
+    /** SHA-256 của nội dung đơn đã chuẩn hóa (SKU đã gộp và sắp xếp) — so khớp request gửi lại. */
+    public static String requestHash(String channel, UUID addressId, Map<String, Long> skuQuantityMap) {
+        String canonical = channel + "|" + addressId + "|" + skuQuantityMap;
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
         }
     }
 

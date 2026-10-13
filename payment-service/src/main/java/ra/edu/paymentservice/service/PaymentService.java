@@ -39,6 +39,12 @@ public class PaymentService {
      */
     @Transactional
     public PaymentView checkout(UUID orderId, UUID userId, CheckoutRequest request) {
+        return checkout(orderId, userId, request, null);
+    }
+
+    /** @param clientIp IP người mua (VNPAY bắt buộc gửi vnp_IpAddr); null nếu không rõ. */
+    @Transactional
+    public PaymentView checkout(UUID orderId, UUID userId, CheckoutRequest request, String clientIp) {
         // 1. Tìm payment theo orderId — nếu chưa có thì order.created event chưa relay tới
         Payment payment = paymentRepository.findByOrderId(orderId)
                 .orElseThrow(() -> new BusinessException(
@@ -84,7 +90,7 @@ public class PaymentService {
         payment.setMethod(methodKey);
         paymentRepository.save(payment);
 
-        String checkoutUrl = adapter.buildCheckoutUrl(payment);
+        String checkoutUrl = adapter.buildCheckoutUrl(payment, clientIp);
         log.info("Checkout initiated: orderId={}, userId={}, method={}", orderId, userId, methodKey);
 
         return toView(payment, checkoutUrl);

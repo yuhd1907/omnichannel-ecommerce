@@ -13,7 +13,6 @@ import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.core.ReturnedMessage;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.data.domain.Pageable;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import ra.edu.orderservice.entity.OutboxEvent;
@@ -156,8 +155,9 @@ class OutboxRelayTest {
     void brokerDown_stopsBatchWithoutBurningRetry() {
         OutboxEvent first = event("ORDER_CREATED");
         OutboxEvent second = event("ORDER_CREATED");
-        when(outboxEventRepository.findByStatusOrderByCreatedAtAsc(eq("PENDING"), any(Pageable.class)))
-                .thenReturn(List.of(first, second));
+        List<UUID> ids = List.of(first.getId(), second.getId());
+        when(outboxEventRepository.lockPendingIds(OutboxRelay.BATCH_SIZE)).thenReturn(ids);
+        when(outboxEventRepository.findByIdInOrderByCreatedAtAsc(ids)).thenReturn(List.of(first, second));
         doThrow(new AmqpConnectException(new ConnectException("Connection refused")))
                 .when(rabbitTemplate).send(anyString(), anyString(), any(Message.class), any(CorrelationData.class));
 
@@ -166,6 +166,8 @@ class OutboxRelayTest {
         verify(rabbitTemplate, times(1)).send(anyString(), anyString(), any(Message.class), any(CorrelationData.class));
         verify(outboxEventRepository, never()).incrementRetry(any(), anyInt());
         verify(outboxEventRepository, never()).markSent(any());
+        // Trả lại cả lô chưa gửi để lượt sau gửi ngay, không phải chờ hết locked_until
+        verify(outboxEventRepository).release(ids);
     }
 
     @Test
@@ -180,15 +182,32 @@ class OutboxRelayTest {
     }
 
     @Test
-    @DisplayName("relay() đọc batch PENDING kích thước 50 theo created_at")
-    void relay_readsPendingBatchOf50() {
-        when(outboxEventRepository.findByStatusOrderByCreatedAtAsc(eq("PENDING"), any(Pageable.class)))
-                .thenReturn(List.of());
+    @DisplayName("relay() nhận lô tối đa 50 event bằng SKIP LOCKED; không có event thì không claim")
+    void relay_locksBatchOf50_noClaimWhenEmpty() {
+        when(outboxEventRepository.lockPendingIds(50)).thenReturn(List.of());
 
         relay.relay();
 
-        ArgumentCaptor<Pageable> page = ArgumentCaptor.forClass(Pageable.class);
-        verify(outboxEventRepository).findByStatusOrderByCreatedAtAsc(eq("PENDING"), page.capture());
-        assertThat(page.getValue().getPageSize()).isEqualTo(50);
+        verify(outboxEventRepository).lockPendingIds(50);
+        verify(outboxEventRepository, never()).claim(any(), anyInt());
+        verifyNoInteractions(rabbitTemplate);
+    }
+
+    @Test
+    @DisplayName("relay() đặt locked_until cho lô vừa nhận rồi gửi từng event theo thứ tự")
+    void relay_claimsThenPublishes() {
+        OutboxEvent first = event("ORDER_CREATED");
+        OutboxEvent second = event("ORDER_CREATED");
+        List<UUID> ids = List.of(first.getId(), second.getId());
+        when(outboxEventRepository.lockPendingIds(50)).thenReturn(ids);
+        when(outboxEventRepository.findByIdInOrderByCreatedAtAsc(ids)).thenReturn(List.of(first, second));
+        brokerConfirms(true, null);
+
+        relay.relay();
+
+        verify(outboxEventRepository).claim(ids, OutboxRelay.CLAIM_SECONDS);
+        verify(outboxEventRepository).markSent(first.getId());
+        verify(outboxEventRepository).markSent(second.getId());
+        verify(outboxEventRepository, never()).release(any());
     }
 }

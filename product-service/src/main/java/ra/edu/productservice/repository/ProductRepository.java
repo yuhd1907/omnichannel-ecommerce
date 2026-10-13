@@ -11,6 +11,8 @@ import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Repository;
 import ra.edu.productservice.entity.Product;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -39,4 +41,47 @@ public interface ProductRepository extends JpaRepository<Product, UUID>, JpaSpec
 
     @EntityGraph(attributePaths = {"category", "brand"})
     Page<Product> findByCategoryIdAndStatus(UUID categoryId, String status, Pageable pageable);
+
+    // ── Tìm kiếm toàn văn (V5__product_full_text_search.sql) ────────────────────────────────
+    // :tsq là tsquery đã được ProductServiceImpl.toPrefixTsQuery dựng từ từ khóa (mỗi từ thêm :*
+    // để gõ dở "iph" vẫn khớp "iPhone"); immutable_unaccent bỏ dấu giống lúc tạo search_vector.
+    // Hai bước: lấy id theo độ liên quan (ts_rank) rồi nạp entity kèm category/brand.
+
+    @Query(value = """
+            SELECT p.id
+            FROM products p, to_tsquery('simple', immutable_unaccent(:tsq)) q
+            WHERE p.status = 'ACTIVE' AND p.search_vector @@ q
+            ORDER BY ts_rank(p.search_vector, q) DESC, p.created_at DESC, p.id
+            LIMIT :limit OFFSET :offset
+            """, nativeQuery = true)
+    List<UUID> searchIds(@Param("tsq") String tsQuery, @Param("limit") int limit, @Param("offset") long offset);
+
+    @Query(value = """
+            SELECT count(*)
+            FROM products p
+            WHERE p.status = 'ACTIVE'
+              AND p.search_vector @@ to_tsquery('simple', immutable_unaccent(:tsq))
+            """, nativeQuery = true)
+    long countSearch(@Param("tsq") String tsQuery);
+
+    @Query(value = """
+            SELECT p.id
+            FROM products p, to_tsquery('simple', immutable_unaccent(:tsq)) q
+            WHERE p.status = 'ACTIVE' AND p.category_id = :categoryId AND p.search_vector @@ q
+            ORDER BY ts_rank(p.search_vector, q) DESC, p.created_at DESC, p.id
+            LIMIT :limit OFFSET :offset
+            """, nativeQuery = true)
+    List<UUID> searchIdsInCategory(@Param("tsq") String tsQuery, @Param("categoryId") UUID categoryId,
+                                   @Param("limit") int limit, @Param("offset") long offset);
+
+    @Query(value = """
+            SELECT count(*)
+            FROM products p
+            WHERE p.status = 'ACTIVE' AND p.category_id = :categoryId
+              AND p.search_vector @@ to_tsquery('simple', immutable_unaccent(:tsq))
+            """, nativeQuery = true)
+    long countSearchInCategory(@Param("tsq") String tsQuery, @Param("categoryId") UUID categoryId);
+
+    @EntityGraph(attributePaths = {"category", "brand"})
+    List<Product> findByIdIn(Collection<UUID> ids);
 }
