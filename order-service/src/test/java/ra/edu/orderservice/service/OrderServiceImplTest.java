@@ -21,6 +21,7 @@ import ra.edu.orderservice.client.dto.ClientApiResponse;
 import ra.edu.orderservice.client.dto.SkuInfo;
 import ra.edu.orderservice.dto.OrderDto;
 import ra.edu.orderservice.dto.request.CreateOrderRequest;
+import ra.edu.orderservice.entity.Inventory;
 import ra.edu.orderservice.entity.Order;
 import ra.edu.orderservice.entity.OutboxEvent;
 import ra.edu.orderservice.exception.BusinessException;
@@ -124,7 +125,7 @@ class OrderServiceImplTest {
         );
 
         // When
-        OrderDto result = orderService.createOrder(userId, request);
+        OrderDto result = orderService.createOrder(userId, "buyer@example.com", request);
 
         // Then
         assertThat(result).isNotNull();
@@ -136,6 +137,32 @@ class OrderServiceImplTest {
         verify(mockLock).tryLock(3L, TimeUnit.SECONDS);
         verify(transactionTemplate).execute(any());
         verify(mockLock).unlock();
+
+        // Email người đặt (từ JWT) nằm trong payload ORDER_CREATED để notification gửi mail
+        org.mockito.ArgumentCaptor<OutboxEvent> outbox = org.mockito.ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxEventRepository).save(outbox.capture());
+        assertThat(outbox.getValue().getPayload()).contains("\"customerEmail\":\"buyer@example.com\"");
+    }
+
+    @Test
+    @DisplayName("createOrder: kho đã không đủ -> 409 OUT_OF_STOCK ngay, KHÔNG gọi identity/product/lock")
+    void createOrder_fastRejectWhenSurelyOutOfStock() {
+        when(inventoryRepository.findBySkuCodeIn(any())).thenReturn(List.of(
+                Inventory.builder().skuCode("SKU-01").availableQty(1L).reservedQty(0L).build()));
+
+        CreateOrderRequest request = new CreateOrderRequest(
+                "WEB",
+                addressId,
+                List.of(new CreateOrderRequest.OrderItemRequest("SKU-01", 2L))
+        );
+
+        assertThatThrownBy(() -> orderService.createOrder(userId, "buyer@example.com", request))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(ErrorCode.OUT_OF_STOCK);
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                });
+        verifyNoInteractions(identityClient, productClient, redissonClient);
+        verify(transactionTemplate, never()).execute(any());
     }
 
     @Test
@@ -172,7 +199,7 @@ class OrderServiceImplTest {
                 )
         );
 
-        OrderDto result = orderService.createOrder(userId, request);
+        OrderDto result = orderService.createOrder(userId, "buyer@example.com", request);
 
         assertThat(result).isNotNull();
         verify(redissonClient).getMultiLock(lockA, lockB);
@@ -200,7 +227,7 @@ class OrderServiceImplTest {
                 List.of(new CreateOrderRequest.OrderItemRequest("SKU-01", 2L))
         );
 
-        assertThatThrownBy(() -> orderService.createOrder(userId, request))
+        assertThatThrownBy(() -> orderService.createOrder(userId, "buyer@example.com", request))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> {
                     BusinessException be = (BusinessException) e;
@@ -237,7 +264,7 @@ class OrderServiceImplTest {
                 List.of(new CreateOrderRequest.OrderItemRequest("SKU-01", 2L))
         );
 
-        assertThatThrownBy(() -> orderService.createOrder(userId, request))
+        assertThatThrownBy(() -> orderService.createOrder(userId, "buyer@example.com", request))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> {
                     BusinessException be = (BusinessException) e;

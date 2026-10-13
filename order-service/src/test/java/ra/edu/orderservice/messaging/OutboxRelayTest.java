@@ -114,6 +114,18 @@ class OutboxRelayTest {
     }
 
     @Test
+    @DisplayName("ORDER_SHIPPED / ORDER_COMPLETED -> routing key order.shipped / order.completed")
+    void fulfillment_routesToOwnKeys() {
+        brokerConfirms(true, null);
+
+        relay.publish(event("ORDER_SHIPPED"));
+        relay.publish(event("ORDER_COMPLETED"));
+
+        verify(rabbitTemplate).send(eq("order.events"), eq("order.shipped"), any(Message.class), any(CorrelationData.class));
+        verify(rabbitTemplate).send(eq("order.events"), eq("order.completed"), any(Message.class), any(CorrelationData.class));
+    }
+
+    @Test
     @DisplayName("Broker NACK -> incrementRetry, không markSent")
     void nack_incrementsRetry() {
         OutboxEvent e = event("ORDER_CREATED");

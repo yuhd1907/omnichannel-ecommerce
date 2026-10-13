@@ -1,5 +1,7 @@
 package ra.edu.common.security;
 
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -12,6 +14,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Filter JWT dùng chung cho mọi service (product, order, payment, notification...).
@@ -49,21 +52,33 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         String token = authHeader.substring(BEARER_PREFIX.length());
 
-        if (!jwtVerifier.isValid(token)) {
+        // Parse + verify chữ ký MỘT lần rồi đọc mọi claim từ kết quả
+        // (trước đây isValid/getUserId/getRoles mỗi hàm tự parse lại -> 3 lần HMAC mỗi request).
+        String userId;
+        List<SimpleGrantedAuthority> authorities;
+        String email;
+        try {
+            Claims claims = jwtVerifier.parse(token);
+            userId = UUID.fromString(claims.getSubject()).toString();
+            List<?> roles = claims.get("roles", List.class);
+            if (roles == null) {
+                // Refresh token không có claim roles -> không được dùng thay access token
+                throw new IllegalArgumentException("Not an access token");
+            }
+            authorities = roles.stream()
+                    .map(role -> new SimpleGrantedAuthority("ROLE_" + role))
+                    .toList();
+            email = claims.get("email", String.class);
+        } catch (JwtException | IllegalArgumentException | NullPointerException e) {
+            // Sai chữ ký / hết hạn / subject không phải UUID / là refresh token -> coi như chưa đăng nhập
             filterChain.doFilter(request, response);
             return;
         }
 
         // Token hợp lệ — nạp authentication vào SecurityContext
-        String userId = jwtVerifier.getUserId(token).toString();
-        List<String> roles = jwtVerifier.getRoles(token);
-
-        List<SimpleGrantedAuthority> authorities = roles.stream()
-                .map(role -> new SimpleGrantedAuthority("ROLE_" + role))
-                .toList();
-
         UsernamePasswordAuthenticationToken authentication =
                 new UsernamePasswordAuthenticationToken(userId, null, authorities);
+        authentication.setDetails(new JwtDetails(email));
 
         SecurityContextHolder.getContext().setAuthentication(authentication);
         filterChain.doFilter(request, response);

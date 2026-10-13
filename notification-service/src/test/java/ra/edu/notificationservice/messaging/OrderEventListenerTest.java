@@ -51,7 +51,7 @@ class OrderEventListenerTest {
 
         listener.onOrderEvent(message("msg-1", "order.created", body));
 
-        verify(notificationService).handleOrderEvent("msg-1", NotificationType.ORDER_CREATED, ORDER_ID, USER_ID);
+        verify(notificationService).handleOrderEvent("msg-1", NotificationType.ORDER_CREATED, ORDER_ID, USER_ID, null);
     }
 
     @Test
@@ -61,7 +61,7 @@ class OrderEventListenerTest {
 
         listener.onOrderEvent(message("msg-2", "order.cancelled", body));
 
-        verify(notificationService).handleOrderEvent("msg-2", NotificationType.ORDER_CANCELLED, ORDER_ID, USER_ID);
+        verify(notificationService).handleOrderEvent("msg-2", NotificationType.ORDER_CANCELLED, ORDER_ID, USER_ID, null);
     }
 
     @Test
@@ -100,10 +100,34 @@ class OrderEventListenerTest {
     }
 
     @Test
+    @DisplayName("order.shipped / order.completed -> type ORDER_SHIPPED / ORDER_COMPLETED")
+    void fulfillmentEvents_mapTypes() {
+        String body = "{\"orderId\":\"" + ORDER_ID + "\",\"userId\":\"" + USER_ID + "\",\"status\":\"SHIPPING\"}";
+
+        listener.onOrderEvent(message("msg-7", "order.shipped", body));
+        listener.onOrderEvent(message("msg-8", "order.completed", body));
+
+        verify(notificationService).handleOrderEvent("msg-7", NotificationType.ORDER_SHIPPED, ORDER_ID, USER_ID, null);
+        verify(notificationService).handleOrderEvent("msg-8", NotificationType.ORDER_COMPLETED, ORDER_ID, USER_ID, null);
+    }
+
+    @Test
+    @DisplayName("Payload có customerEmail -> truyền email xuống service để gửi mail")
+    void customerEmail_passedThrough() {
+        String body = "{\"orderId\":\"" + ORDER_ID + "\",\"userId\":\"" + USER_ID
+                + "\",\"customerEmail\":\"buyer@example.com\"}";
+
+        listener.onOrderEvent(message("msg-9", "order.confirmed", body));
+
+        verify(notificationService).handleOrderEvent("msg-9", NotificationType.ORDER_CONFIRMED, ORDER_ID, USER_ID,
+                "buyer@example.com");
+    }
+
+    @Test
     @DisplayName("Routing key lạ -> reject")
     void unknownRoutingKey_rejected() {
         String body = "{\"orderId\":\"" + ORDER_ID + "\",\"userId\":\"" + USER_ID + "\"}";
-        assertThatThrownBy(() -> listener.onOrderEvent(message("msg-6", "order.shipped", body)))
+        assertThatThrownBy(() -> listener.onOrderEvent(message("msg-6", "order.refunded", body)))
                 .isInstanceOf(AmqpRejectAndDontRequeueException.class);
         verifyNoInteractions(notificationService);
     }

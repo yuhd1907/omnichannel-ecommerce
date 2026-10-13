@@ -8,6 +8,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 import ra.edu.orderservice.entity.Order;
 import ra.edu.orderservice.entity.OrderItem;
 import ra.edu.orderservice.entity.OutboxEvent;
@@ -139,5 +140,69 @@ class OrderStateServiceTest {
 
         assertThatThrownBy(() -> service.confirmPaid(orderId)).isInstanceOf(BusinessException.class);
         verify(outboxEventRepository, never()).save(any());
+    }
+
+    // ─────────────────────────── advanceFulfillment ──────────────────────────
+
+    @Test
+    @DisplayName("advanceFulfillment: CONFIRMED -> SHIPPING, outbox ORDER_SHIPPED, không chạm kho")
+    void advance_toShipping() {
+        when(orderRepository.transition(orderId, "CONFIRMED", "SHIPPING")).thenReturn(1);
+        when(orderRepository.findWithItemsById(orderId)).thenReturn(Optional.of(orderWithTwoItems()));
+
+        service.advanceFulfillment(orderId, "shipping");
+
+        ArgumentCaptor<OutboxEvent> ev = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxEventRepository).save(ev.capture());
+        assertThat(ev.getValue().getEventType()).isEqualTo("ORDER_SHIPPED");
+        assertThat(ev.getValue().getPayload()).contains("\"orderId\":\"" + orderId + "\"");
+        verifyNoInteractions(inventoryRepository);
+    }
+
+    @Test
+    @DisplayName("advanceFulfillment: SHIPPING -> COMPLETED, outbox ORDER_COMPLETED")
+    void advance_toCompleted() {
+        when(orderRepository.transition(orderId, "SHIPPING", "COMPLETED")).thenReturn(1);
+        when(orderRepository.findWithItemsById(orderId)).thenReturn(Optional.of(orderWithTwoItems()));
+
+        service.advanceFulfillment(orderId, "COMPLETED");
+
+        ArgumentCaptor<OutboxEvent> ev = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxEventRepository).save(ev.capture());
+        assertThat(ev.getValue().getEventType()).isEqualTo("ORDER_COMPLETED");
+    }
+
+    @Test
+    @DisplayName("advanceFulfillment: đơn PENDING mà đòi COMPLETED -> 409, không outbox")
+    void advance_wrongState_conflict() {
+        when(orderRepository.transition(orderId, "SHIPPING", "COMPLETED")).thenReturn(0);
+        Order pending = orderWithTwoItems();
+        pending.setStatus("PENDING");
+        when(orderRepository.findById(orderId)).thenReturn(Optional.of(pending));
+
+        assertThatThrownBy(() -> service.advanceFulfillment(orderId, "COMPLETED"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        verify(outboxEventRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("advanceFulfillment: không có đơn -> 404")
+    void advance_notFound() {
+        when(orderRepository.transition(orderId, "CONFIRMED", "SHIPPING")).thenReturn(0);
+        when(orderRepository.findById(orderId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.advanceFulfillment(orderId, "SHIPPING"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    @Test
+    @DisplayName("advanceFulfillment: target không hợp lệ (CANCELLED/PENDING) -> 400, không gọi DB")
+    void advance_invalidTarget() {
+        assertThatThrownBy(() -> service.advanceFulfillment(orderId, "CANCELLED"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        verifyNoInteractions(orderRepository, outboxEventRepository);
     }
 }

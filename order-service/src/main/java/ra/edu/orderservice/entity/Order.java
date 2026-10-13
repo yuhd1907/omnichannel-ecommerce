@@ -29,6 +29,10 @@ public class Order {
     @Column(name = "user_id", nullable = false, updatable = false)
     private UUID userId;
 
+    /** Email người đặt, lấy từ JWT lúc tạo đơn (migration V2). Null với đơn cũ. */
+    @Column(name = "customer_email", updatable = false, length = 255)
+    private String customerEmail;
+
     /** WEB | MOBILE — khớp CHECK constraint trong migration. */
     @Column(name = "channel", nullable = false, length = 20)
     private String channel;

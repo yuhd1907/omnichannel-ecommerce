@@ -53,4 +53,23 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
     int transitionFromPending(@Param("id") UUID orderId,
                               @Param("status") String newStatus,
                               @Param("paymentStatus") String newPaymentStatus);
+
+    /**
+     * Chuyển trạng thái fulfillment (CONFIRMED -> SHIPPING -> COMPLETED) có điều kiện.
+     * Cùng nguyên tắc với transitionFromPending: chỉ một request thắng, request còn lại nhận 0.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE Order o
+            SET o.status    = :to,
+                o.updatedAt = CURRENT_TIMESTAMP
+            WHERE o.id = :id
+              AND o.status = :from
+            """)
+    int transition(@Param("id") UUID orderId,
+                   @Param("from") String fromStatus,
+                   @Param("to") String toStatus);
+
+    /** Danh sách đơn theo trạng thái (admin). */
+    Page<Order> findByStatus(String status, Pageable pageable);
 }

@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ra.edu.common.response.ErrorCode;
 import ra.edu.orderservice.entity.Order;
 import ra.edu.orderservice.entity.OrderItem;
 import ra.edu.orderservice.entity.OutboxEvent;
@@ -63,6 +64,7 @@ public class OrderStateService {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("orderId", order.getId());
         payload.put("userId", order.getUserId());
+        payload.put("customerEmail", order.getCustomerEmail());
         payload.put("reason", reason);
         writeOutbox(order, "ORDER_CANCELLED", payload);
 
@@ -97,11 +99,60 @@ public class OrderStateService {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("orderId", order.getId());
         payload.put("userId", order.getUserId());
+        payload.put("customerEmail", order.getCustomerEmail());
         payload.put("totalAmount", order.getTotalAmount());
         writeOutbox(order, "ORDER_CONFIRMED", payload);
 
         log.info("Order confirmed (paid): id={}", orderId);
         return true;
+    }
+
+    /** Trạng thái đích -> trạng thái nguồn bắt buộc. Chỉ cho đi tiến, không nhảy cóc. */
+    private static final Map<String, String> FULFILLMENT_FROM = Map.of(
+            "SHIPPING",  "CONFIRMED",
+            "COMPLETED", "SHIPPING");
+
+    private static final Map<String, String> FULFILLMENT_EVENT = Map.of(
+            "SHIPPING",  "ORDER_SHIPPED",
+            "COMPLETED", "ORDER_COMPLETED");
+
+    /**
+     * Admin chuyển đơn đã thanh toán sang giao hàng / hoàn tất. Không đụng kho
+     * (kho đã chuyển reserved -> sold lúc confirmPaid).
+     *
+     * @throws BusinessException 400 nếu target không hợp lệ, 404 nếu không có đơn,
+     *                           409 nếu đơn không ở trạng thái nguồn tương ứng.
+     */
+    @Transactional
+    public Order advanceFulfillment(UUID orderId, String target) {
+        String to = target == null ? "" : target.trim().toUpperCase();
+        String from = FULFILLMENT_FROM.get(to);
+        if (from == null) {
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION,
+                    "Target status must be SHIPPING or COMPLETED, got: " + target,
+                    HttpStatus.BAD_REQUEST);
+        }
+
+        if (orderRepository.transition(orderId, from, to) == 0) {
+            Order current = orderRepository.findById(orderId)
+                    .orElseThrow(() -> new BusinessException(
+                            "ORDER_NOT_FOUND", "Order not found", HttpStatus.NOT_FOUND));
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION,
+                    "Cannot change order from " + current.getStatus() + " to " + to
+                            + " (requires " + from + ")",
+                    HttpStatus.CONFLICT);
+        }
+
+        Order order = loadWithItems(orderId);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", order.getId());
+        payload.put("userId", order.getUserId());
+        payload.put("customerEmail", order.getCustomerEmail());
+        payload.put("status", to);
+        writeOutbox(order, FULFILLMENT_EVENT.get(to), payload);
+
+        log.info("Order fulfillment advanced: id={}, {} -> {}", orderId, from, to);
+        return order;
     }
 
     private Order loadWithItems(UUID orderId) {

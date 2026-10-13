@@ -48,6 +48,10 @@ public class OrderSecurityConfig {
                         // server.error.include-stacktrace o production.
                         .requestMatchers("/error").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
+                        // Prometheus scrape trong mạng Docker (prod không publish port service; gateway bị Nginx chặn)
+                        .requestMatchers("/actuator/prometheus").permitAll()
+                        // OpenAPI spec cho Swagger UI ở gateway
+                        .requestMatchers("/v3/api-docs", "/v3/api-docs/**").permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
