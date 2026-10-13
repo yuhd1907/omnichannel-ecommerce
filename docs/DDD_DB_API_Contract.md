@@ -111,9 +111,10 @@ Không có bảng `payment_attempts`, `webhook_inbox`, `refunds`; các lần th�
 
 | Bảng | Cột cốt lõi | Ràng buộc |
 | --- | --- | --- |
-| `notification_logs` | `id`, `source_event_id`, `recipient`, `status`, `attempt_count`, `created_at`, `sent_at` | unique `(source_event_id, recipient)` tránh gửi lặp; `status=PENDING/SENT/FAILED` |
+| `processed_messages` | `message_id`, `processed_at` | PK `message_id` (= id outbox của bên phát) — chống xử lý lặp |
+| `notifications` | `id`, `user_id`, `order_id`, `type`, `content`, `created_at` | `type` CHECK 5 giá trị `ORDER_CREATED/CONFIRMED/CANCELLED/SHIPPED/COMPLETED` |
 
-Consumer nhận `OrderConfirmed`/`OrderCancelled`, gửi email giả lập và lưu log; lỗi Notification không làm rollback Order. Không cần template management, SMS/Push hoặc database Redis cho MVP.
+Consumer nhận 5 event `order.*`, ghi `processed_messages` + `notifications` trong một transaction rồi gửi email (SMTP → Mailpit) sau commit; lỗi Notification không làm rollback Order. Không cần template management, SMS/Push hoặc database Redis cho MVP.
 
 ## 3. API contract v1 (theo phạm vi MVP)
 
@@ -203,7 +204,7 @@ Error: dùng mã HTTP thực (`400`, `401`, `403`, `404`, `409`, `422`, `429`, `
 2. Lấy Redisson lock theo từng `sku_code` trước khi mở transaction. Trong **một transaction `order_db`**, tạo `orders(PENDING, UNPAID)` và items; reserve từng SKU bằng cập nhật có điều kiện `available_qty -= q`, `reserved_qty += q`; ghi `OrderCreated` vào `outbox_events`. Nếu bất kỳ SKU nào thiếu hàng, rollback toàn bộ transaction và trả `409`; nhả lock sau commit/rollback.
 3. Client gọi Payment tạo checkout. Payment có duy nhất một `payments` row/order; các lần thử nằm trong `payment_transactions`. Payment xác minh webhook và ghi transaction, `payments.status`, `outbox_events` cùng một transaction; `gateway_txn_id UNIQUE` và chuyển trạng thái có điều kiện chống webhook lặp.
 4. Order tiêu thụ `PaymentSucceeded`/`PaymentFailed`. Nếu đơn còn `PENDING`, trong một transaction cập nhật trạng thái Order và số lượng theo `order_items`: thành công trừ `reserved_qty`, chuyển `PAID/CONFIRMED`; thất bại cộng lại `available_qty`, trừ `reserved_qty`, chuyển `FAILED/CANCELLED`. Đơn đã xử lý không được tác động tồn kho lần hai.
-5. Job timeout xử lý các đơn `PENDING` quá hạn theo cùng nhánh release; khi chưa có cột `expires_at`, dùng `created_at + thời hạn giữ hàng` cấu hình. Notification nhận `OrderConfirmed`/`OrderCancelled`, ghi log và gửi email giả lập độc lập.
+5. Job timeout xử lý các đơn `PENDING` quá hạn theo cùng nhánh release; khi chưa có cột `expires_at`, dùng `created_at + thời hạn giữ hàng` cấu hình. Notification nhận mọi event của đơn, lưu thông báo và gửi email độc lập.
 
 **Race và giới hạn MVP:** timeout/hủy có thể thắng trước webhook thành công. Khi tiền đã thu mà đơn đã `CANCELLED` và hàng đã nhả, **không tự xác nhận đơn**. Ghi log/cảnh báo cho admin đối soát và xử lý hoàn tiền thủ công ngoài phạm vi MVP. Không được âm thầm đánh dấu `PAID` rồi bỏ qua hàng. Cần thiết kế hoàn tiền tự động ở giai đoạn sau. Vì thiếu bảng idempotency key của Order, retry `POST /orders` từ client có thể tạo đơn khác; nâng cấp thêm `Idempotency-Key` + unique storage trước khi mở bán thực tế.
 
