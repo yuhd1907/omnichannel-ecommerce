@@ -10,8 +10,12 @@ import java.util.UUID;
 
 public interface OrderService {
 
-    /** Tạo đơn hàng mới. userId lấy từ JWT, không tin client. */
-    OrderDto createOrder(UUID userId, CreateOrderRequest request);
+    /**
+     * Tạo đơn hàng mới. userId và email lấy từ JWT, không tin client.
+     *
+     * @param customerEmail claim email của token, lưu snapshot để gửi mail; có thể null
+     */
+    OrderDto createOrder(UUID userId, String customerEmail, CreateOrderRequest request);
 
     /**
      * Lấy chi tiết đơn hàng.
@@ -30,4 +34,15 @@ public interface OrderService {
      * Đơn không của user (và không phải ADMIN) → 404.
      */
     OrderDto cancelOrder(UUID orderId, UUID userId, boolean isAdmin);
+
+    /**
+     * Admin: danh sách mọi đơn, lọc theo status nếu có. Sort created_at DESC.
+     */
+    PageData<OrderSummaryDto> listAllOrders(String status, Pageable pageable);
+
+    /**
+     * Admin: chuyển đơn CONFIRMED -> SHIPPING hoặc SHIPPING -> COMPLETED.
+     * Sai thứ tự -> 409 INVALID_STATUS_TRANSITION; không có đơn -> 404.
+     */
+    OrderDto updateStatusByAdmin(UUID orderId, String targetStatus);
 }

@@ -26,6 +26,8 @@ public class RabbitTopologyConfig {
     public static final String RK_ORDER_CREATED   = "order.created";
     public static final String RK_ORDER_CANCELLED = "order.cancelled";
     public static final String RK_ORDER_CONFIRMED = "order.confirmed";
+    public static final String RK_ORDER_SHIPPED   = "order.shipped";
+    public static final String RK_ORDER_COMPLETED = "order.completed";
 
     public static final String RK_PAYMENT_SUCCEEDED = "payment.succeeded";
     public static final String RK_PAYMENT_FAILED    = "payment.failed";

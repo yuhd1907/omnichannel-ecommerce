@@ -16,6 +16,12 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-flyway'
     implementation 'org.flywaydb:flyway-database-postgresql'
 
+    // Metrics cho Prometheus: /actuator/prometheus
+    runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
+
+    // Gui email that qua SMTP (Mailpit khi demo)
+    implementation 'org.springframework.boot:spring-boot-starter-mail'
+
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
     runtimeOnly 'org.postgresql:postgresql'

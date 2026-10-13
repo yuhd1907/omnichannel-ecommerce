@@ -54,7 +54,9 @@ public class OutboxRelay {
     private static final Map<String, String> ROUTING_KEYS = Map.of(
             "ORDER_CREATED",   RabbitTopologyConfig.RK_ORDER_CREATED,
             "ORDER_CANCELLED", RabbitTopologyConfig.RK_ORDER_CANCELLED,
-            "ORDER_CONFIRMED", RabbitTopologyConfig.RK_ORDER_CONFIRMED
+            "ORDER_CONFIRMED", RabbitTopologyConfig.RK_ORDER_CONFIRMED,
+            "ORDER_SHIPPED",   RabbitTopologyConfig.RK_ORDER_SHIPPED,
+            "ORDER_COMPLETED", RabbitTopologyConfig.RK_ORDER_COMPLETED
     );
 
     private final OutboxEventRepository outboxEventRepository;

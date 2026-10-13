@@ -1,0 +1,43 @@
+# Prometheus scrape 6 Spring Boot service + RabbitMQ trong mang ecommerce-network.
+# Ten target = ten service trong docker-compose.yml (khong dung localhost).
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: api-gateway
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['api-gateway:8080']
+
+  - job_name: identity-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['identity-service:8081']
+
+  - job_name: product-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['product-service:8082']
+
+  - job_name: order-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['order-service:8083']
+
+  - job_name: payment-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['payment-service:8084']
+
+  - job_name: notification-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['notification-service:8085']
+
+  # Plugin rabbitmq_prometheus bat san trong image chinh thuc (cong 15692).
+  # per-object: co nhan 'queue' de xem tung queue (outbox, DLQ...).
+  - job_name: rabbitmq
+    metrics_path: /metrics/per-object
+    static_configs:
+      - targets: ['rabbitmq:15692']

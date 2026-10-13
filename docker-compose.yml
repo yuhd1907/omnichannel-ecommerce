@@ -223,6 +223,10 @@ services:
       RABBITMQ_PORT: 5672
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
+      # Gui email that toi Mailpit (xem thu tai http://localhost:8025). false = chi ghi log.
+      MAIL_ENABLED: ${MAIL_ENABLED:-true}
+      MAIL_HOST: mailpit
+      MAIL_PORT: 1025
     ports:
       - "${NOTIFICATION_PORT:-8085}:8085"
     depends_on:
@@ -252,6 +256,12 @@ services:
       ORDER_URI: http://order-service:8083
       PAYMENT_URI: http://payment-service:8084
       PAYMENT_PUBLIC_BASE_URL: http://payment-service:8084
+      # Rate limit (token bucket / giay / user hoac IP). Mac dinh giu nguyen nhu cu;
+      # chi nang khi chay load test, vd: RATE_LIMIT_LOGIN_REPLENISH=100 trong .env
+      RATE_LIMIT_REPLENISH: ${RATE_LIMIT_REPLENISH:-10}
+      RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-20}
+      RATE_LIMIT_LOGIN_REPLENISH: ${RATE_LIMIT_LOGIN_REPLENISH:-3}
+      RATE_LIMIT_LOGIN_BURST: ${RATE_LIMIT_LOGIN_BURST:-5}
     ports:
       - "${GATEWAY_PORT:-8080}:8080"
     depends_on:
@@ -272,6 +282,67 @@ services:
       retries: 5
       start_period: 60s
 
+  # ------------------------------------------------------------------------
+  #  Cong cu demo: Mailpit (hop thu gia), Prometheus + Grafana (giam sat)
+  # ------------------------------------------------------------------------
+  mailpit:
+    image: axllent/mailpit:v1.30.7
+    container_name: ecommerce-mailpit
+    restart: unless-stopped
+    ports:
+      - "${MAILPIT_UI_PORT:-8025}:8025"   # Web UI xem thu
+      - "${MAILPIT_SMTP_PORT:-1025}:1025" # SMTP (de chay service bang gradle bootRun)
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+    networks:
+      - ecommerce-network
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: ecommerce-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=3d
+    volumes:
+      - ./deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - ecommerce-network
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    container_name: ecommerce-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/omnichannel-overview.json
+    volumes:
+      - ./deploy/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - ecommerce-network
+
 networks:
   ecommerce-network:
     driver: bridge
@@ -280,3 +351,5 @@ volumes:
   postgres_data:
   redis_data:
   rabbitmq_data:
+  prometheus_data:
+  grafana_data:

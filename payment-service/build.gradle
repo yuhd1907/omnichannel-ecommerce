@@ -17,6 +17,12 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
     implementation 'org.flywaydb:flyway-database-postgresql'
 
+    // Metrics cho Prometheus: /actuator/prometheus
+    runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
+
+    // OpenAPI spec tai /v3/api-docs (Swagger UI gom o api-gateway)
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-api:3.1.1'
+
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
     runtimeOnly 'org.postgresql:postgresql'

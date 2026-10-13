@@ -25,6 +25,7 @@ import ra.edu.common.response.PageData;
 import ra.edu.orderservice.dto.OrderDto;
 import ra.edu.orderservice.dto.OrderSummaryDto;
 import ra.edu.orderservice.dto.request.CreateOrderRequest;
+import ra.edu.orderservice.entity.Inventory;
 import ra.edu.orderservice.entity.Order;
 import ra.edu.orderservice.entity.OrderItem;
 import ra.edu.orderservice.entity.OutboxEvent;
@@ -63,7 +64,7 @@ public class OrderServiceImpl implements OrderService {
     private long waitTimeSeconds = 3;
 
     @Override
-    public OrderDto createOrder(UUID userId, CreateOrderRequest request) {
+    public OrderDto createOrder(UUID userId, String customerEmail, CreateOrderRequest request) {
 
         // ── 1. Validate channel (ngoài transaction) ─────────────────────────
         String channel = request.channel().toUpperCase();
@@ -74,10 +75,7 @@ public class OrderServiceImpl implements OrderService {
                     HttpStatus.BAD_REQUEST);
         }
 
-        // ── 2. Gọi Identity lấy địa chỉ + verify ownership (HTTP - ngoài tx) ─
-        AddressInfo address = fetchAddress(request.addressId(), userId);
-
-        // ── 3. Gộp items trùng SKU, sắp xếp theo skuCode tránh deadlock ─────
+        // ── 2. Gộp items trùng SKU, sắp xếp theo skuCode tránh deadlock ─────
         Map<String, Long> skuQuantityMap = request.items().stream()
                 .collect(Collectors.toMap(
                         CreateOrderRequest.OrderItemRequest::skuCode,
@@ -85,14 +83,24 @@ public class OrderServiceImpl implements OrderService {
                         Long::sum,          // gộp quantity nếu trùng skuCode
                         TreeMap::new));     // TreeMap: sort lexicographic, cố định thứ tự
 
-        // ── 4. Gọi Product lấy thông tin từng SKU (gRPC - ngoài tx) ─────────
+        // ── 3. Từ chối sớm khi CHẮC CHẮN hết hàng (đọc không khóa) ─────────
+        //    Flash sale: phần lớn request đến sau khi kho về 0. Chặn ở đây thì không tốn
+        //    1 HTTP (identity) + 1 gRPC (product) + lock Redis cho mỗi request vô vọng.
+        //    Không thay thế bước reserve có điều kiện ở dưới — đó mới là chốt đúng/sai.
+        rejectIfSurelyOutOfStock(skuQuantityMap);
+
+        // ── 4. Gọi Identity lấy địa chỉ + verify ownership (HTTP - ngoài tx) ─
+        AddressInfo address = fetchAddress(request.addressId(), userId);
+
+        // ── 5. Gọi Product lấy thông tin từng SKU (gRPC - ngoài tx) ─────────
         Map<String, SkuInfo> skuInfoMap = fetchSkuInfos(skuQuantityMap.keySet());
 
-        // ── 5. Build order + items trong bộ nhớ (ngoài tx) ───────────────────
+        // ── 6. Build order + items trong bộ nhớ (ngoài tx) ───────────────────
         String shippingAddress = buildShippingAddress(address);
 
         Order order = Order.builder()
                 .userId(userId)
+                .customerEmail(customerEmail)
                 .channel(channel)
                 .shippingRecipientName(address.recipientName())
                 .shippingPhone(address.phone())
@@ -131,7 +139,7 @@ public class OrderServiceImpl implements OrderService {
         order.setTotalAmount(totalAmount);
         order.setItems(items);
 
-        // ── 6. Lấy Redisson distributed lock cho mọi SKU theo thứ tự đã sort ──
+        // ── 7. Lấy Redisson distributed lock cho mọi SKU theo thứ tự đã sort ──
         RLock lock = null;
         if (lockEnabled) {
             lock = getLockForSkus(skuQuantityMap.keySet());
@@ -156,7 +164,7 @@ public class OrderServiceImpl implements OrderService {
         }
 
         try {
-            // ── 7. Persist order + reserve inventory + outbox trong 1 Transaction ngắn ───
+            // ── 8. Persist order + reserve inventory + outbox trong 1 Transaction ngắn ───
             //    Dùng TransactionTemplate để ranh giới transaction nằm trọn vẹn SAU các cuộc
             //    gọi mạng (HTTP/gRPC) và TRƯỚC khi nhả lock (tránh release lock trước khi commit).
             Order savedOrder = transactionTemplate.execute(status -> {
@@ -194,7 +202,7 @@ public class OrderServiceImpl implements OrderService {
             log.info("Order created: id={}, userId={}, total={}", savedOrder.getId(), userId, totalAmount);
             return toDto(savedOrder);
         } finally {
-            // ── 8. Nhả lock trong finally sau khi transaction đã commit hoàn tất ──
+            // ── 9. Nhả lock trong finally sau khi transaction đã commit hoàn tất ──
             if (lock != null && lock.isHeldByCurrentThread()) {
                 try {
                     lock.unlock();
@@ -217,6 +225,19 @@ public class OrderServiceImpl implements OrderService {
     }
 
     // ─────────────────────────── private helpers ─────────────────────────────
+
+    private void rejectIfSurelyOutOfStock(Map<String, Long> skuQuantityMap) {
+        for (Inventory inv : inventoryRepository.findBySkuCodeIn(skuQuantityMap.keySet())) {
+            Long requested = skuQuantityMap.get(inv.getSkuCode());
+            if (requested != null && inv.getAvailableQty() < requested) {
+                throw new BusinessException(
+                        ErrorCode.OUT_OF_STOCK,
+                        "Insufficient inventory for SKU: " + inv.getSkuCode(),
+                        HttpStatus.CONFLICT);
+            }
+        }
+        // SKU chưa có dòng inventory: để bước reserve quyết định như cũ.
+    }
 
     private AddressInfo fetchAddress(UUID addressId, UUID userId) {
         ClientApiResponse<AddressInfo> response;
@@ -282,10 +303,19 @@ public class OrderServiceImpl implements OrderService {
         return '{'
                 + "\"orderId\":\""   + order.getId()         + '"'
                 + ",\"userId\":\""    + order.getUserId()     + '"'
+                + ",\"customerEmail\":" + jsonString(order.getCustomerEmail())
                 + ",\"channel\":\""   + order.getChannel()    + '"'
                 + ",\"totalAmount\":" + order.getTotalAmount()
                 + ",\"skus\":"        + skusJson
                 + '}';
+    }
+
+    /** Chuỗi JSON có escape, hoặc null. Email đã được identity validate nhưng không tin tuyệt đối. */
+    private static String jsonString(String value) {
+        if (value == null) {
+            return "null";
+        }
+        return '"' + value.replace("\\", "\\\\").replace("\"", "\\\"") + '"';
     }
 
     private OrderDto toDto(Order order) {
@@ -383,5 +413,31 @@ public class OrderServiceImpl implements OrderService {
 
         log.info("Order cancelled by {}: id={}", isAdmin ? "admin" : "owner", orderId);
         return toDto(orderRepository.findWithItemsById(orderId).orElseThrow());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageData<OrderSummaryDto> listAllOrders(String status, Pageable pageable) {
+        Pageable sorted = PageRequest.of(
+                pageable.getPageNumber(),
+                pageable.getPageSize(),
+                Sort.by(Sort.Direction.DESC, "createdAt"));
+
+        Page<Order> page = (status == null || status.isBlank())
+                ? orderRepository.findAll(sorted)
+                : orderRepository.findByStatus(status.trim().toUpperCase(), sorted);
+
+        return new PageData<>(
+                page.getContent().stream().map(this::toSummaryDto).toList(),
+                page.getNumber(),
+                page.getSize(),
+                page.getTotalElements(),
+                page.getTotalPages());
+    }
+
+    @Override
+    public OrderDto updateStatusByAdmin(UUID orderId, String targetStatus) {
+        // Transaction nằm trong OrderStateService; ở đây chỉ map sang DTO (items đã nạp sẵn).
+        return toDto(orderStateService.advanceFulfillment(orderId, targetStatus));
     }
 }

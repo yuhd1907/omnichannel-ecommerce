@@ -11,6 +11,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import ra.edu.common.response.ApiResponse;
 import ra.edu.common.response.PageData;
+import ra.edu.common.security.JwtDetails;
 import ra.edu.orderservice.dto.OrderDto;
 import ra.edu.orderservice.dto.OrderSummaryDto;
 import ra.edu.orderservice.dto.request.CreateOrderRequest;
@@ -29,9 +30,12 @@ public class OrderController {
     @PostMapping
     public ResponseEntity<ApiResponse<OrderDto>> createOrder(
             @AuthenticationPrincipal String userId,
+            Authentication auth,
             @Valid @RequestBody CreateOrderRequest request
     ) {
-        OrderDto result = orderService.createOrder(UUID.fromString(userId), request);
+        // Email lấy từ claim của access token (JwtAuthenticationFilter gắn vào details)
+        String email = auth.getDetails() instanceof JwtDetails details ? details.email() : null;
+        OrderDto result = orderService.createOrder(UUID.fromString(userId), email, request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.of("ORDER_CREATED", "Order created successfully", result));
     }

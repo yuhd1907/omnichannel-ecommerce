@@ -8,12 +8,17 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import ra.edu.orderservice.entity.Inventory;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 public interface InventoryRepository extends JpaRepository<Inventory, UUID> {
 
     Optional<Inventory> findBySkuCode(String skuCode);
+
+    /** Đọc tồn kho nhiều SKU một lần (không khóa) — dùng cho kiểm tra hết hàng sớm. */
+    List<Inventory> findBySkuCodeIn(Collection<String> skuCodes);
 
     /**
      * Atomic reserve: trừ available_qty, cộng reserved_qty, tăng version.

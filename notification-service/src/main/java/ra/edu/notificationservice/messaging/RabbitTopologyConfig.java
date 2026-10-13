@@ -24,6 +24,8 @@ public class RabbitTopologyConfig {
     public static final String RK_ORDER_CREATED      = "order.created";
     public static final String RK_ORDER_CANCELLED    = "order.cancelled";
     public static final String RK_ORDER_CONFIRMED    = "order.confirmed";
+    public static final String RK_ORDER_SHIPPED      = "order.shipped";
+    public static final String RK_ORDER_COMPLETED    = "order.completed";
 
     public static final String QUEUE = "notification.order-events";
     public static final String DLX   = QUEUE + ".dlx";
@@ -54,6 +56,16 @@ public class RabbitTopologyConfig {
     @Bean
     public Binding orderConfirmedBinding() {
         return BindingBuilder.bind(notificationOrderEventsQueue()).to(orderEventsExchange()).with(RK_ORDER_CONFIRMED);
+    }
+
+    @Bean
+    public Binding orderShippedBinding() {
+        return BindingBuilder.bind(notificationOrderEventsQueue()).to(orderEventsExchange()).with(RK_ORDER_SHIPPED);
+    }
+
+    @Bean
+    public Binding orderCompletedBinding() {
+        return BindingBuilder.bind(notificationOrderEventsQueue()).to(orderEventsExchange()).with(RK_ORDER_COMPLETED);
     }
 
     @Bean

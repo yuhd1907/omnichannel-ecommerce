@@ -9,6 +9,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import ra.edu.notificationservice.entity.Notification;
 import ra.edu.notificationservice.entity.NotificationType;
+import ra.edu.notificationservice.mail.EmailSender;
 import ra.edu.notificationservice.repository.NotificationRepository;
 import ra.edu.notificationservice.repository.ProcessedMessageRepository;
 
@@ -26,6 +27,9 @@ class NotificationServiceTest {
 
     @Mock
     private NotificationRepository notificationRepository;
+
+    @Mock
+    private EmailSender emailSender;
 
     @InjectMocks
     private NotificationService notificationService;
@@ -50,6 +54,18 @@ class NotificationServiceTest {
     }
 
     @Test
+    @DisplayName("Có email -> gửi mail (ngoài transaction thì gửi ngay) với subject theo loại event")
+    void newMessage_withEmail_sendsMail() {
+        when(processedMessageRepository.insertIfAbsent("msg-2")).thenReturn(1);
+
+        notificationService.handleOrderEvent("msg-2", NotificationType.ORDER_SHIPPED, orderId, userId, "buyer@example.com");
+
+        ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
+        verify(emailSender).send(eq("buyer@example.com"), subject.capture(), contains(orderId.toString()));
+        assertThat(subject.getValue()).contains("đang được giao");
+    }
+
+    @Test
     @DisplayName("Message trùng (insertIfAbsent = 0) -> bỏ qua, KHÔNG lưu notification")
     void duplicateMessage_isSkipped() {
         when(processedMessageRepository.insertIfAbsent("msg-1")).thenReturn(0);
@@ -58,5 +74,6 @@ class NotificationServiceTest {
 
         assertThat(handled).isFalse();
         verify(notificationRepository, never()).save(any());
+        verifyNoInteractions(emailSender);
     }
 }

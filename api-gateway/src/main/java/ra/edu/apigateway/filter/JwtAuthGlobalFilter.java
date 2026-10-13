@@ -95,6 +95,11 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
             return true;
         }
 
+        // 5. OpenAPI spec cho Swagger UI (chỉ đọc, không chứa dữ liệu người dùng)
+        if (pathMatcher.match("/api-docs/*", path)) {
+            return true;
+        }
+
         return false;
     }
 

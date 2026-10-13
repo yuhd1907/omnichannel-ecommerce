@@ -33,15 +33,20 @@ public class OrderEventListener {
     private static final Map<String, NotificationType> TYPES = Map.of(
             RabbitTopologyConfig.RK_ORDER_CREATED,   NotificationType.ORDER_CREATED,
             RabbitTopologyConfig.RK_ORDER_CANCELLED, NotificationType.ORDER_CANCELLED,
-            RabbitTopologyConfig.RK_ORDER_CONFIRMED, NotificationType.ORDER_CONFIRMED
+            RabbitTopologyConfig.RK_ORDER_CONFIRMED, NotificationType.ORDER_CONFIRMED,
+            RabbitTopologyConfig.RK_ORDER_SHIPPED,   NotificationType.ORDER_SHIPPED,
+            RabbitTopologyConfig.RK_ORDER_COMPLETED, NotificationType.ORDER_COMPLETED
     );
 
     private final NotificationService notificationService;
     private final JsonMapper          jsonMapper;
 
-    /** Trường cần dùng trong payload ORDER_CREATED / ORDER_CANCELLED; trường khác bỏ qua. */
+    /**
+     * Trường cần dùng trong payload mọi event order.*; trường khác bỏ qua.
+     * customerEmail có thể null (đơn tạo trước khi order-service lưu email) -> chỉ không gửi mail.
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    record OrderEventPayload(UUID orderId, UUID userId) {}
+    record OrderEventPayload(UUID orderId, UUID userId, String customerEmail) {}
 
     @RabbitListener(queues = RabbitTopologyConfig.QUEUE)
     public void onOrderEvent(Message message) {
@@ -70,6 +75,7 @@ public class OrderEventListener {
             throw new AmqpRejectAndDontRequeueException("Payload missing orderId/userId (messageId=" + messageId + ")");
         }
 
-        notificationService.handleOrderEvent(messageId, type, payload.orderId(), payload.userId());
+        notificationService.handleOrderEvent(messageId, type, payload.orderId(), payload.userId(),
+                payload.customerEmail());
     }
 }
