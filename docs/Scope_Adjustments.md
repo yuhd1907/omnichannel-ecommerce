@@ -18,9 +18,11 @@ Ba ràng buộc chi phối mọi điều chỉnh bên dưới:
 | 2 | Elasticsearch cho tìm kiếm | Lọc theo danh mục + phân trang trên PostgreSQL | Tốn RAM, cần pipeline đồng bộ chưa có; dữ liệu demo nhỏ | Hoãn |
 | 3 | Inventory là service riêng | Gộp vào **Order & Inventory**, chung `order_db` | Giữ hàng phải nguyên tử với tạo đơn; tách ra buộc phải làm giao dịch phân tán | Đã gộp |
 | 4 | Hoàn tiền (refund) | Không hoàn tiền tự động; đối soát thủ công | Là một luồng nghiệp vụ riêng phụ thuộc API từng cổng thanh toán | Hoãn |
-| 5 | Thông báo SMS | Chỉ email giả lập (kế hoạch) | Cần nhà cung cấp trả phí; về kiến trúc không khác email | Hoãn |
+| 5 | Thông báo SMS | Chỉ email, gửi qua SMTP tới Mailpit (hộp thư giả lập, xem tại cổng 8025) | Cần nhà cung cấp trả phí; về kiến trúc không khác email | Hoãn |
 | 6 | CD qua SSH (`appleboy/ssh-action`) | CD dạng pull thay cho `appleboy/ssh-action` | Nhà cung cấp VPS chặn kết nối quốc tế vào cổng 22 (GitHub Actions báo `dial tcp :22 i/o timeout`) và chặn VPS kết nối ra hạ tầng Azure của GitHub Actions (`pipelines/broker.actions.githubusercontent.com` timeout), nên không dùng được SSH-push lẫn self-hosted runner. Giải pháp: GitHub Actions build và push image lên GHCR; trên VPS, cron chạy `scripts/auto-deploy.sh` mỗi 2 phút (`git fetch` + `docker compose pull`, có thay đổi thì `up -d --remove-orphans`). Mô hình giống GitOps (Argo CD, Flux). Độ trễ deploy tối đa khoảng 2 phút. | Đã thay thế |
 | 7 | Chứng chỉ SSL tự động qua HTTP-01 | Cấp qua DNS-01 (DuckDNS TXT), gia hạn thủ công mỗi 90 ngày | Nhà cung cấp VPS chặn kết nối quốc tế vào cổng 80 (đã xác nhận bằng tcpdump), khiến HTTP-01 challenge bị timeout; website chỉ truy cập được từ Việt Nam do nhà cung cấp chặn kết nối quốc tế. Giải pháp: Cấp SSL qua DNS-01 challenge (bản ghi TXT trên DuckDNS) không phụ thuộc cổng 80; gia hạn thủ công mỗi 90 ngày. | Đã thay thế |
+| 8 | Tích hợp cổng thanh toán thật (VNPAY/MoMo, QR) | `MockAdapter` sau interface `PaymentGatewayAdapter`: tạo phiên thanh toán giả, webhook ký HMAC-SHA256 (`X-Signature`) | Cổng thật cần đăng ký merchant, sandbox và URL webhook công khai nhận được kết nối quốc tế (VPS bị chặn, xem #6, #7). Phần cần chứng minh là luồng Saga và xử lý webhook an toàn (xác minh chữ ký, chống webhook lặp bằng `gateway_txn_id UNIQUE`, so khớp số tiền), không phụ thuộc cổng cụ thể. Thêm cổng thật chỉ là thêm một adapter. | Đã thay thế |
+| 9 | Giám sát (monitoring) | Prometheus + Grafana trong Docker Compose, chỉ bind `127.0.0.1`; xem qua SSH tunnel. Nginx chặn `/actuator/*` trừ `/actuator/health` | Metrics lộ cấu trúc hệ thống nên không mở ra Internet; không cần thêm tên miền/chứng chỉ cho Grafana | Đã triển khai (thu gọn) |
 
 ## 3. Chi tiết từng điều chỉnh
 
@@ -68,7 +70,7 @@ Ba ràng buộc chi phối mọi điều chỉnh bên dưới:
 
 **Lý do**
 
-- **Thứ tự ưu tiên.** Payment service hiện mới là khung. Phải làm xong luồng nền tảng trước: tạo phiên thanh toán, webhook đã xác minh chữ ký, chống webhook lặp (`gateway_txn_id UNIQUE`), phát `PaymentSucceeded`/`PaymentFailed`. Hoàn tiền chỉ có nghĩa khi luồng này đã chạy.
+- **Thứ tự ưu tiên.** Ưu tiên làm xong luồng nền tảng trước (đã xong): tạo phiên thanh toán, webhook đã xác minh chữ ký, chống webhook lặp (`gateway_txn_id UNIQUE`), phát `PaymentSucceeded`/`PaymentFailed` qua outbox. Hoàn tiền chỉ có nghĩa khi luồng này đã chạy.
 - **Là một luồng nghiệp vụ đầy đủ, không phải một API.** Hoàn tiền cần gọi API hoàn tiền riêng của từng cổng (VNPAY, MoMo) cùng môi trường sandbox tương ứng, mô hình trạng thái riêng (yêu cầu → đang xử lý → thành công/thất bại, hoàn một phần hay toàn phần), bảng `refunds`, quyền admin phê duyệt và đối soát với cổng thanh toán.
 
 **Cách bù trong MVP:** trường hợp rủi ro nhất là *tiền về sau khi đơn đã bị hủy* (job timeout hoặc người dùng hủy chạy trước webhook). Hệ thống **không tự xác nhận lại đơn** vì hàng đã được nhả cho người khác. Thay vào đó, sự kiện được ghi log/cảnh báo để admin đối soát và hoàn tiền thủ công (contract, mục 5). Đơn không bao giờ bị âm thầm đánh dấu `PAID` mà không có hàng.
@@ -80,7 +82,7 @@ Ba ràng buộc chi phối mọi điều chỉnh bên dưới:
 - **Chi phí và thủ tục.** Gửi SMS thật cần nhà cung cấp tính phí theo tin nhắn và thường phải đăng ký tên thương hiệu người gửi, điều không khả thi trong thời gian của đồ án.
 - **Không thêm giá trị kiến trúc.** Về mặt hệ thống, SMS và email giống nhau: đều là một consumer nhận `OrderConfirmed`/`OrderCancelled` từ RabbitMQ, gửi đi và ghi log. Làm tốt một kênh đã chứng minh được thiết kế hướng sự kiện.
 
-**Cách bù / mở rộng:** Notification gửi email giả lập và ghi `notification_logs` với `UNIQUE (source_event_id, recipient)` để không gửi lặp khi nhận event trùng; lỗi Notification không rollback Order. Thêm SMS chỉ là thêm một bộ gửi theo kênh dùng chung bảng log; luồng event và các service khác không đổi.
+**Cách bù / mở rộng:** Notification nhận cả 5 event của đơn (`order.created/confirmed/cancelled/shipped/completed`), ghi `processed_messages` (khóa chính là `messageId` = id outbox) cùng transaction với `notifications` để không xử lý lặp khi nhận event trùng, rồi gửi email thật qua SMTP **sau khi commit** tới Mailpit. Email người nhận là snapshot lấy từ JWT lúc đặt đơn (`orders.customer_email`), đi kèm mọi event. Gửi mail là best-effort: SMTP lỗi chỉ ghi log, không làm retry message hay rollback Order. Thêm SMS chỉ là thêm một bộ gửi theo kênh; luồng event và các service khác không đổi.
 
 ## 4. Các giới hạn MVP khác (đã ghi trong contract)
 
@@ -98,4 +100,8 @@ Các điều chỉnh trên chỉ cắt *thành phần*, không cắt *kiến tr�
 - Giữ hàng nguyên tử, chống bán vượt kho bằng cập nhật có điều kiện + ràng buộc CHECK; khóa phân tán Redisson theo `sku_code` trước transaction để giảm tranh chấp khi nhiều người mua cùng SKU.
 - Phân quyền `USER`/`ADMIN` ở từng service, bên cạnh lớp xác thực ở gateway.
 
-Phần còn đang làm theo kế hoạch: publish outbox lên RabbitMQ (Order đã ghi event vào bảng `outbox_events`, chưa có worker gửi đi), consumer ở Payment/Notification, job hủy đơn quá hạn giữ hàng, Payment và Notification.
+- **Saga điều phối bằng sự kiện** qua RabbitMQ với **Transactional Outbox** ở Order và Payment (relay có publisher confirm + `mandatory`), consumer idempotent, DLQ cho message hỏng. Luồng đã kiểm chứng trên VPS: thanh toán thành công → `CONFIRMED/PAID`, kho chuyển giữ → bán; thanh toán thất bại hoặc quá hạn 15 phút → `CANCELLED`, nhả kho. Xem dấu vết một đơn trên cả 3 database bằng `scripts/saga-check.sql`.
+- **Vòng đời giao hàng** cho admin: `CONFIRMED → SHIPPING → COMPLETED` (`PATCH /api/v1/admin/orders/{id}/status`), chuyển trạng thái có điều kiện, mỗi bước phát event và gửi email.
+- **Tài liệu API** Swagger UI gom 4 service tại gateway: `/swagger-ui.html`.
+- **Kiểm thử tải:** `scripts/flashsale-k6.js` (tính đúng: 100 người / kho 10, kết quả ở [Flashsale_Results.md](Flashsale_Results.md)) và `scripts/load-order-k6.js` (thông lượng qua gateway, tăng tới 1000 req/s, kiểm bảo toàn kho bằng `scripts/load-verify.sql`).
+- **CI/CD:** GitHub Actions chạy test, build và push image lên GHCR; VPS tự kéo image mới (mục #6).

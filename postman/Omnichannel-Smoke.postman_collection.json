@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Omnichannel Smoke Test",
-    "description": "Smoke test S1 (thanh toan thanh cong) va S2 (that bai, tra kho).\n\nCan environment co: gatewayUrl (vd https://huyecommerce.duckdns.org/api/v1 hoac http://localhost:8080/api/v1) va webhookSecret.\n\nThu tu: chay folder 1 -> chay lenh SQL cap ADMIN (in ra o Console sau SM02) -> chay folder 2, 3, 4.",
+    "description": "Smoke test S1 (thanh toan thanh cong), S2 (that bai, tra kho) va S3 (admin giao hang: CONFIRMED -> SHIPPING -> COMPLETED).\n\nCan environment co: gatewayUrl (vd https://huyecommerce.duckdns.org/api/v1 hoac http://localhost:8080/api/v1) va webhookSecret.\n\nThu tu: chay folder 1 -> chay lenh SQL cap ADMIN (in ra o Console sau SM02) -> chay folder 2, 3, 4, 5.\n\nMoi buoc cua don deu gui email: xem tai Mailpit (http://localhost:8025, tren VPS qua SSH tunnel).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -590,7 +590,7 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));"
+                  "pm.test(\"Checkout OK (200/201)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));"
                 ]
               }
             }
@@ -938,7 +938,7 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));"
+                  "pm.test(\"Checkout OK (200/201)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));"
                 ]
               }
             }
@@ -1118,6 +1118,639 @@
                   "  pm.expect(d.availableQty).to.eql(Number(pm.collectionVariables.get(\"availBeforeS2\")));",
                   "  pm.expect(d.reservedQty).to.eql(Number(pm.collectionVariables.get(\"reservedBeforeS2\")));",
                   "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. S3 - Giao hang (admin)",
+      "item": [
+        {
+          "name": "S3-1 Tao don",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/orders",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "orders"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channel\": \"WEB\",\n  \"addressId\": \"{{addressId}}\",\n  \"items\": [ { \"skuCode\": \"{{skuCode}}\", \"quantity\": 1 } ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"201 Created\", () => pm.response.to.have.status(201));",
+                  "const d = pm.response.json().data;",
+                  "pm.collectionVariables.set(\"orderId\", d.id);",
+                  "pm.collectionVariables.set(\"orderAmount\", d.totalAmount);",
+                  "console.log(\"orderId =\", d.id, \"| totalAmount =\", d.totalAmount);",
+                  "pm.test(\"status = PENDING\", () => pm.expect(d.status).to.eql(\"PENDING\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "S3-2 Xem payment (doi 3s)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/orders/{{orderId}}/payments",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "payments"
+              ]
+            },
+            "description": "Neu 404: payment chua kip tao tu event order.created. Doi vai giay roi Send lai.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(function () {}, 3000);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Payment da duoc tao (200)\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "console.log(\"payment status =\", d && d.status);",
+                  "pm.test(\"payment = PENDING\", () => pm.expect(d.status).to.eql(\"PENDING\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "S3-3 Checkout MOCK",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/orders/{{orderId}}/payments",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "payments"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"method\": \"MOCK\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Checkout OK (200/201)\", () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "S3-4 Webhook SUCCESS",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Signature",
+                "value": "{{signature}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/webhooks/payments/mock",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "payments",
+                "mock"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{{webhookBody}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Body webhook + chu ky HMAC-SHA256 (hex) tinh tren dung chuoi body se gui.",
+                  "const secret = pm.environment.get(\"webhookSecret\") || pm.collectionVariables.get(\"webhookSecret\");",
+                  "if (!secret) { throw new Error(\"Chua dat bien webhookSecret trong environment\"); }",
+                  "const body = JSON.stringify({",
+                  "  orderId: pm.collectionVariables.get(\"orderId\"),",
+                  "  gatewayTxnId: \"TXN-SUCCESS-\" + Date.now(),",
+                  "  status: \"SUCCESS\",",
+                  "  amount: Number(pm.collectionVariables.get(\"orderAmount\"))",
+                  "});",
+                  "pm.collectionVariables.set(\"webhookBody\", body);",
+                  "pm.collectionVariables.set(\"signature\", CryptoJS.HmacSHA256(body, secret).toString(CryptoJS.enc.Hex));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json().data;",
+                  "console.log(\"webhook result =\", r && r.result);",
+                  "pm.test(\"result = PROCESSED\", () => pm.expect(r.result).to.eql(\"PROCESSED\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "S3-5 Kiem tra don -> CONFIRMED/PAID (doi 4s)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/orders/{{orderId}}",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}"
+              ]
+            },
+            "description": "Neu van PENDING: relay/consumer chua kip xu ly. Doi vai giay roi Send lai.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(function () {}, 4000);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "console.log(\"Order\", d.id, \"status =\", d.status, \"paymentStatus =\", d.paymentStatus);",
+                  "pm.test(\"status = CONFIRMED\", () => pm.expect(d.status).to.eql(\"CONFIRMED\"));",
+                  "pm.test(\"paymentStatus = PAID\", () => pm.expect(d.paymentStatus).to.eql(\"PAID\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "S3-6 User thuong doi trang thai -> 403",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/admin/orders/{{orderId}}/status",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "admin",
+                "orders",
+                "{{orderId}}",
+                "status"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"status\": \"SHIPPING\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"403 Forbidden (chi ADMIN)\", () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "S3-7 Admin xem don CONFIRMED",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/admin/orders?status=CONFIRMED&size=5",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "admin",
+                "orders"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "CONFIRMED"
+                },
+                {
+                  "key": "size",
+                  "value": "5"
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "const page = pm.response.json().data;",
+                  "console.log(\"So don CONFIRMED =\", page.totalElements);",
+                  "pm.test(\"Co don vua thanh toan\", () => pm.expect(page.items.map(o => o.id)).to.include(pm.collectionVariables.get(\"orderId\")));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "S3-8 Nhay coc CONFIRMED -> COMPLETED -> 409",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/admin/orders/{{orderId}}/status",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "admin",
+                "orders",
+                "{{orderId}}",
+                "status"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"status\": \"COMPLETED\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"409 Conflict\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"code = INVALID_STATUS_TRANSITION\", () => pm.expect(pm.response.json().code).to.eql(\"INVALID_STATUS_TRANSITION\"));",
+                  "console.log(pm.response.json().message);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "S3-9 Admin giao hang -> SHIPPING",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/admin/orders/{{orderId}}/status",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "admin",
+                "orders",
+                "{{orderId}}",
+                "status"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"status\": \"SHIPPING\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"status = SHIPPING\", () => pm.expect(pm.response.json().data.status).to.eql(\"SHIPPING\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "S3-10 Admin hoan tat -> COMPLETED",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/admin/orders/{{orderId}}/status",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "admin",
+                "orders",
+                "{{orderId}}",
+                "status"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"status\": \"COMPLETED\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"status = COMPLETED\", () => pm.expect(pm.response.json().data.status).to.eql(\"COMPLETED\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "S3-11 User xem don -> COMPLETED/PAID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/orders/{{orderId}}",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}"
+              ]
+            },
+            "description": "Neu van PENDING: relay/consumer chua kip xu ly. Doi vai giay roi Send lai.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(function () {}, 4000);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "console.log(\"Order\", d.id, \"status =\", d.status, \"paymentStatus =\", d.paymentStatus);",
+                  "pm.test(\"status = COMPLETED\", () => pm.expect(d.status).to.eql(\"COMPLETED\"));",
+                  "pm.test(\"paymentStatus = PAID\", () => pm.expect(d.paymentStatus).to.eql(\"PAID\"));"
                 ]
               }
             }
