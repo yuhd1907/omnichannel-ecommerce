@@ -76,3 +76,20 @@ services:
     ports: !override
       - "127.0.0.1:8080:8080"
 
+  # Cong cu demo: chi bind 127.0.0.1, xem tu may minh qua SSH tunnel:
+  #   ssh -L 3000:127.0.0.1:3000 -L 8025:127.0.0.1:8025 -L 9090:127.0.0.1:9090 huy@<vps>
+  # SMTP 1025 khong can mo: notification goi mailpit:1025 trong mang Docker.
+  mailpit:
+    restart: unless-stopped
+    ports: !override
+      - "127.0.0.1:${MAILPIT_UI_PORT:-8025}:8025"
+
+  prometheus:
+    restart: unless-stopped
+    ports: !override
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+
+  grafana:
+    restart: unless-stopped
+    ports: !override
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
