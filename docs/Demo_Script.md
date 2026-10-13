@@ -4,6 +4,22 @@ Thời lượng mục tiêu: khoảng 15 phút demo, phần còn lại để h�
 
 Ký hiệu: **[VPS]** là lệnh bash chạy trên VPS (prompt `huy@azvps-...`), **[PS]** là PowerShell trên máy mình.
 
+## Trình tự buổi demo
+
+| # | Phần | Thời gian | Mở gì |
+| --- | --- | --- | --- |
+| 1 | Tổng quan: đã làm / chưa làm, kiến trúc | 3–4 phút | [Project_Overview.md](Project_Overview.md), `architecture.png` |
+| 2 | Swagger — tài liệu API | 1 phút | `/swagger-ui.html` |
+| 2b | Phần mở rộng: tìm kiếm, `Idempotency-Key`, VNPAY sandbox | 3 phút | Trình duyệt, Swagger / Postman |
+| 3 | S1 — đặt hàng, thanh toán thành công | 3 phút | Postman folder 3, Mailpit, `saga-check.sql` |
+| 4 | S2 — thanh toán thất bại, trả kho | 2 phút | Postman folder 4, Mailpit |
+| 5 | S3 — admin giao hàng | 2 phút | Postman folder 5, Mailpit |
+| 6 | Bảo mật | 2 phút | Terminal VPS |
+| 7 | Chịu lỗi: RabbitMQ chết vẫn nhận đơn | 2 phút | Terminal VPS, Postman |
+| 8 | Giám sát + load test | 2 phút | Grafana, kết quả k6 |
+| 9 | CI/CD | 1 phút | GitHub Actions, log cron |
+| | Hỏi đáp | | Bảng câu hỏi cuối file |
+
 ---
 
 ## 0. Chuẩn bị (làm trước giờ demo ít nhất 30 phút)
@@ -36,6 +52,8 @@ curl -s https://huyecommerce.duckdns.org/actuator/health; echo
 
 Lần gọi Feign/gRPC đầu tiên sau khi khởi động chậm, có thể trả 503. Chạy trước **folder 1 → 2 → 3** của Postman collection `Omnichannel Smoke Test` (environment "VPS Smoke") một lần. Folder 2 vẫn cần lệnh SQL cấp ADMIN in ra ở Console sau SM02. Sau bước này đã có sẵn `adminToken`, `userToken`, `addressId` cho phần demo.
 
+**Access token chỉ sống 15 phút.** Ngay trước khi bắt đầu phần 3, gửi lại **SM04 Login admin** và **SM07 Login user** (folder 2) để lấy token mới. Gặp `401 Invalid or expired token` giữa buổi thì làm lại bước này.
+
 ### 0.4 Mở sẵn các tab
 
 SSH tunnel để xem Mailpit, Grafana, RabbitMQ (chỉ bind `127.0.0.1` trên VPS):
@@ -58,18 +76,36 @@ Xóa hộp thư Mailpit trước khi bắt đầu (nút **Delete all**) để ch
 
 ---
 
-## 1. Kiến trúc (1 phút)
+## 1. Tổng quan dự án (3–4 phút)
 
-Mở `docs/architecture.png`. Ý chính:
+Mở [Project_Overview.md](Project_Overview.md) (xem trên GitHub cho đẹp). Trình bày theo thứ tự:
 
-- 6 service Spring Boot, mỗi service một database (5 DB trên PostgreSQL; gateway không có DB).
-- API Gateway là cửa vào duy nhất: xác thực JWT, rate limit bằng Redis. Trên VPS chỉ mở 22/80/443; Nginx là reverse proxy duy nhất.
-- Đồng bộ: Order → Product qua **gRPC**, Order → Identity qua **REST (Feign)**.
-- Bất đồng bộ: **Saga** qua RabbitMQ, mỗi bên ghi event vào **Transactional Outbox** cùng transaction với dữ liệu nghiệp vụ.
+1. **Bài toán** (mục 1): thương mại điện tử đa kênh, 3 yêu cầu kỹ thuật trọng tâm: không bán vượt kho, nhất quán dữ liệu giữa các service, chịu lỗi.
+2. **Kiến trúc** (`architecture.png`):
+   - 6 service, mỗi service một database.
+   - Gateway là cửa vào duy nhất, sau Nginx HTTPS.
+   - Đồng bộ: gRPC (Order → Product) và Feign (Order → Identity).
+   - Bất đồng bộ: Saga qua RabbitMQ + Transactional Outbox.
+3. **Con số chính** (mục 2): đọc nhanh bảng.
+4. **Đã làm được** (mục 3): chỉ đọc tiêu đề 5 nhóm, nói "phần demo sẽ chứng minh từng nhóm".
+5. **Chưa làm được** (mục 4): nói thẳng và nêu lý do. Ba điểm hội đồng hay hỏi:
+   - không có giao diện, demo bằng API;
+   - thanh toán thật mới ở mức VNPAY sandbox;
+   - không dùng MongoDB/Elasticsearch (tìm kiếm bằng `tsvector`).
+6. Chuyển sang demo: "Giờ em chứng minh các phần trên chạy thật trên VPS."
 
 ## 2. Swagger (1 phút)
 
 Mở `/swagger-ui.html`, đổi qua lại 4 service ở ô **Select a definition** góc phải. Bấm **Authorize**, dán `userToken`, thử `GET /api/v1/orders`. Điểm cần nói: spec do từng service tự sinh, gateway chỉ gom lại; "Try it out" vẫn đi qua gateway nên vẫn qua JWT và rate limit.
+
+## 2b. Phần mở rộng: tìm kiếm, Idempotency-Key, VNPAY (3 phút)
+
+Dùng Swagger (đã Authorize) hoặc Postman (biến `userToken`, `addressId` có sẵn sau folder 1–2).
+
+1. **Tìm kiếm toàn văn** (public, mở thẳng trên trình duyệt):
+   `https://huyecommerce.duckdns.org/api/v1/products?q=dien thoai` (không dấu) rồi `?q=iph` (gõ dở) → vẫn ra kết quả. Nói: cột `search_vector` generated + GIN index, `unaccent`, mỗi từ khớp tiền tố.
+2. **Idempotency-Key:** gửi `POST /api/v1/orders` kèm header `Idempotency-Key: demo-key-1` → `201`. Gửi lại **y hệt** → `200`, header `Idempotent-Replayed: true`, cùng `id` đơn, kho không bị trừ lần hai. Đổi `quantity` mà giữ key → `422 IDEMPOTENCY_KEY_REUSED`. (Mỗi buổi demo đổi key mới.)
+3. **VNPAY sandbox** (nếu đã cấu hình): `POST /api/v1/orders/{orderId}/payments` với `{"method":"VNPAY"}` → copy `checkoutUrl` mở trên trình duyệt → thẻ test NCB `9704198526191432198`, tên `NGUYEN VAN A`, ngày phát hành `07/15`, OTP `123456` (đối chiếu với thẻ test trong email đăng ký sandbox). Sau khi trả tiền trình duyệt về return URL, hiện JSON `{orderId, result: "SUCCESS"}`; `GET /api/v1/orders/{orderId}` → `CONFIRMED / PAID`. Log: `docker logs ecommerce-payment-service 2>&1 | grep VNPAY`.
 
 ## 3. S1 — Đặt hàng và thanh toán thành công (3 phút)
 
@@ -140,7 +176,10 @@ docker start ecommerce-rabbitmq
 ## 8. Giám sát và load test (2 phút)
 
 - **Grafana** (dashboard "Omnichannel - Tổng quan"): request/giây, p95 theo service, mã HTTP ở gateway, heap JVM, connection DB, message đang chờ trong từng queue.
-- **Load test** (chạy trên máy local; xem `scripts/load-order-k6.js`): tăng 100 → 500 → 1000 req/s qua gateway, sau đó chạy `scripts/load-verify.sql` → 4 cột kiểm tra đều `t` (không âm kho, không bán vượt, bảo toàn tồn kho). Nếu không chạy trực tiếp thì mở ảnh chụp kết quả k6 và Grafana đã chuẩn bị sẵn.
+- **Load test** (đã chạy 13/10 trên máy local, chi tiết ở `Flashsale_Results.md`). Mở ảnh Grafana và tổng kết k6 đã chụp, nói 3 ý:
+  1. Đúng 1000 đơn cho kho 1000 dưới tải 1000 req/s; `load-verify.sql` cả 4 cột `t`.
+  2. Hết hàng: giữ 1000 req/s, trung vị 10 ms, nhờ bước từ chối sớm.
+  3. Còn hàng: khoảng 30 đơn/giây cho một SKU, vì các đơn cùng SKU đi tuần tự qua khóa. Chọn đúng trước nhanh sau; nêu hướng cải thiện.
 - Kết quả tính đúng 100 người / kho 10: `docs/Flashsale_Results.md`.
 
 ## 9. CI/CD (1 phút)
@@ -162,9 +201,13 @@ Nói lý do không dùng SSH-push: nhà cung cấp VPS chặn kết nối quốc
 | Câu hỏi | Trả lời ngắn |
 | --- | --- |
 | Sao không bán vượt kho khi 1000 người mua cùng lúc? | `UPDATE inventory ... WHERE available_qty >= :q` (PostgreSQL khóa dòng) + `CHECK (available_qty >= 0)`. Redisson lock chỉ giảm tranh chấp, tắt lock vẫn đúng (Flashsale_Results lần 2). |
+| Chịu 1000 req/s mà sao chỉ bán khoảng 30 đơn/giây? | Mọi đơn mua cùng một SKU nên phải đi tuần tự qua khóa kho; đó là cái giá của "không bán vượt". Request chờ quá 3 giây nhận `409 INVENTORY_BUSY` để client thử lại, không treo. Muốn nhanh hơn: chia kho một SKU thành nhiều dòng, hoặc xếp hàng đơn qua queue. |
 | Event gửi 2 lần thì sao? | Consumer idempotent: notification ghi `processed_messages(messageId)` cùng transaction; payment có `order_id UNIQUE`, `gateway_txn_id UNIQUE`. |
 | Sao không publish thẳng lên RabbitMQ? | DB commit mà broker chết thì mất event (hoặc ngược lại). Outbox ghi cùng transaction, relay gửi sau, có publisher confirm. Demo mục 7. |
-| Thanh toán thật? | MOCK sau interface `PaymentGatewayAdapter`; cổng thật cần merchant và URL webhook nhận được kết nối quốc tế (Scope_Adjustments mục 8). |
+| Thanh toán thật? | VNPAY sandbox qua `VnpayAdapter` (ký HMAC-SHA512, IPN + return URL), cùng interface `PaymentGatewayAdapter` với MOCK; cả hai đi chung một hàm áp kết quả có chống lặp. Môi trường thật chỉ khác TMN code / secret (Scope_Adjustments mục 8). |
+| Người dùng bấm "Đặt hàng" 2 lần / mạng chập chờn? | Client gửi `Idempotency-Key` (UUID mỗi lần bấm, giữ nguyên khi gửi lại). Server lưu key cùng transaction với đơn; gửi lại → trả đúng đơn cũ, không giữ kho lần hai. Hai request trùng key song song: bên sau chờ ở khóa chính rồi nhận đơn của bên trước. |
+| Chạy 2 instance order-service thì relay có gửi trùng? | Không: mỗi relay nhận lô bằng `SELECT ... FOR UPDATE SKIP LOCKED` + `locked_until`, hai instance nhận hai lô khác nhau; instance chết thì hết 60 giây lô tự được nhận lại (Messaging_Topology 5.1). |
+| Tìm kiếm làm thế nào? | `tsvector` generated column + GIN index, bỏ dấu bằng `unaccent`, mỗi từ khớp tiền tố (`iph` → iPhone). Elasticsearch để sau, sẽ đồng bộ bằng event `product.*`. |
 | Sao gộp Inventory vào Order? | Giữ hàng phải nguyên tử với tạo đơn; tách ra thành giao dịch phân tán (Scope_Adjustments 3.3). |
 | Tiền về sau khi đơn bị hủy? | Đơn không hồi sinh vì hàng đã trả kho cho người khác; payment đánh dấu `needs_refund` để đối soát thủ công. |
 
@@ -173,6 +216,7 @@ Nói lý do không dùng SSH-push: nhà cung cấp VPS chặn kết nối quốc
 | Hiện tượng | Xử lý |
 | --- | --- |
 | `503 ..._UNAVAILABLE` ở lần tạo đơn đầu | Service vừa khởi động, gửi lại request. Đã có bước làm nóng ở mục 0.3. |
+| `401 Invalid or expired token` | Token quá 15 phút: gửi lại SM04 và SM07 (folder 2) rồi chạy tiếp. |
 | Đơn vẫn `PENDING` sau webhook | Đợi 3–5 giây rồi gửi lại "Kiểm tra đơn" (relay chạy theo chu kỳ). |
 | Không có thư trong Mailpit | Kiểm tra tunnel còn mở; `docker logs ecommerce-notification-service --tail 20` tìm dòng `[EMAIL ĐÃ GỬI]`. |
 | Trang không mở được từ mạng ngoài Việt Nam | Nhà cung cấp VPS chặn kết nối quốc tế; dùng mạng trong nước (4G điện thoại). |

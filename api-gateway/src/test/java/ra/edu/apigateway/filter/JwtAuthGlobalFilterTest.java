@@ -174,4 +174,26 @@ class JwtAuthGlobalFilterTest {
         assertThat(filterChained.get()).isFalse();
         assertThat(nested.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
     }
+
+    @Test
+    @DisplayName("Whitelist: GET /api/v1/payments/vnpay/ipn không token -> cho qua; POST vào đó thì cần token")
+    void testWhitelistVnpayCallbacksOnly() {
+        AtomicBoolean filterChained = new AtomicBoolean(false);
+        GatewayFilterChain chain = ex -> {
+            filterChained.set(true);
+            return Mono.empty();
+        };
+
+        MockServerWebExchange ipn = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/api/v1/payments/vnpay/ipn?vnp_TxnRef=x").build());
+        filter.filter(ipn, chain).block();
+        assertThat(filterChained.get()).isTrue();
+
+        filterChained.set(false);
+        MockServerWebExchange post = MockServerWebExchange.from(
+                MockServerHttpRequest.post("/api/v1/payments/vnpay/ipn").build());
+        filter.filter(post, chain).block();
+        assertThat(filterChained.get()).isFalse();
+        assertThat(post.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
 }

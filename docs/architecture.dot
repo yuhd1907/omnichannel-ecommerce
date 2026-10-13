@@ -15,7 +15,7 @@ digraph architecture {
 
   client [label=<<b>Web / Mobile client</b><br/><font point-size="9">channel = WEB | MOBILE</font>>,
           fillcolor="#EEF2FF"];
-  pg_gateway [label=<<b>Cổng thanh toán</b><br/><font point-size="9">MOCK — webhook ký HMAC-SHA256</font>>,
+  pg_gateway [label=<<b>Cổng thanh toán</b><br/><font point-size="9">MOCK — webhook ký HMAC-SHA256<br/>VNPAY sandbox — IPN ký HMAC-SHA512</font>>,
               fillcolor="#FFFFFF", style="rounded,dashed,filled", color="#64748B"];
 
   legend [shape=plaintext, style="", margin=0, label=<
@@ -42,10 +42,10 @@ Swagger UI gom 4 service</font>>,
              fillcolor="#DBEAFE", color="#1D4ED8", penwidth=2];
 
     identity [label=<<b>Identity &amp; User</b>  :8081<br/><font point-size="9">register / login / refresh JWT<br/>user, role, address</font>>];
-    product  [label=<<b>Product Catalog</b>  :8082<br/><font point-size="9">REST: catalog, admin RBAC<br/>gRPC server :9082</font>>];
+    product  [label=<<b>Product Catalog</b>  :8082<br/><font point-size="9">REST: catalog, tìm kiếm tsvector<br/>gRPC server :9082 · outbox</font>>];
     order    [label=<<b>Order &amp; Inventory</b>  :8083<br/><font point-size="9">đặt / hủy đơn, giữ hàng nguyên tử<br/>CONFIRMED → SHIPPING → COMPLETED<br/>outbox + job hủy đơn quá hạn</font>>,
               fillcolor="#FFF7ED", color="#C2410C", penwidth=2];
-    payment      [label=<<b>Payment</b>  :8084<br/><font point-size="9">phiên thanh toán, webhook HMAC<br/>chống webhook lặp, outbox</font>>];
+    payment      [label=<<b>Payment</b>  :8084<br/><font point-size="9">MOCK + VNPAY adapter, webhook / IPN<br/>chống webhook lặp, outbox</font>>];
     notification [label=<<b>Notification</b>  :8085<br/><font point-size="9">consumer idempotent<br/>gửi email sau commit</font>>];
 
     postgres [label=<<b>PostgreSQL 16</b> — database per service<br/>
@@ -53,7 +53,7 @@ Swagger UI gom 4 service</font>>,
               shape=cylinder, fillcolor="#E0F2FE", color="#0369A1"];
     redis    [label=<<b>Redis 7</b><br/><font point-size="9">rate-limit tokens<br/>Redisson lock theo sku_code</font>>,
               shape=cylinder, fillcolor="#FEE2E2", color="#B91C1C"];
-    rabbitmq [label=<<b>RabbitMQ 3.13</b><br/><font point-size="9">order.events · payment.events<br/>DLQ cho message lỗi</font>>,
+    rabbitmq [label=<<b>RabbitMQ 3.13</b><br/><font point-size="9">order.events · payment.events · product.events<br/>DLQ cho message lỗi</font>>,
               fillcolor="#DCFCE7", color="#15803D", penwidth=2];
 
     mailpit    [label=<<b>Mailpit</b><br/><font point-size="9">SMTP :1025 · hộp thư :8025</font>>, fillcolor="#F5F3FF", color="#7C3AED"];
@@ -72,12 +72,12 @@ Swagger UI gom 4 service</font>>,
   // ---- REST (xanh duong) ----
   edge [color="#2563EB", fontcolor="#1D4ED8"];
   client     -> nginx   [label="  HTTPS  /api/v1/**", penwidth=2.2];
-  pg_gateway -> nginx   [label="  webhook", style=dashed];
+  pg_gateway -> nginx   [label="  webhook / IPN", style=dashed];
   nginx      -> gateway [penwidth=2.2];
   gateway -> identity [label="/auth, /users  "];
   gateway -> product  [label="/products"];
   gateway -> order    [label="/orders\n/admin/orders, /admin/inventory"];
-  gateway -> payment  [label="  /orders/*/payments\n  /webhooks"];
+  gateway -> payment  [label="  /orders/*/payments\n  /payments, /webhooks"];
   order   -> identity [label="Feign\naddress"];
 
   // ---- gRPC (cam) ----
@@ -87,8 +87,9 @@ Swagger UI gom 4 service</font>>,
   edge [color="#16A34A", fontcolor="#15803D", style=solid];
   order    -> rabbitmq     [label="order.created / confirmed /\ncancelled / shipped / completed"];
   payment  -> rabbitmq     [label="payment.succeeded / failed"];
+  product  -> rabbitmq     [label="product.sku.created"];
   rabbitmq -> payment      [label="order.created\norder.cancelled", style=dashed];
-  rabbitmq -> order        [label="payment.*", style=dashed];
+  rabbitmq -> order        [label="payment.*\nproduct.sku.created", style=dashed];
   rabbitmq -> notification [label="order.*"];
 
   // ---- Giam sat / email (tim) ----

@@ -15,13 +15,13 @@ Ba ràng buộc chi phối mọi điều chỉnh bên dưới:
 | # | Đề bài | Hệ thống hiện tại | Lý do chính | Trạng thái |
 | --- | --- | --- | --- | --- |
 | 1 | MongoDB cho Product Catalog | PostgreSQL 16, thuộc tính biến thể lưu `JSONB` | Dữ liệu catalog có quan hệ và ràng buộc chặt; `JSONB` đã đáp ứng phần schema linh hoạt | Đã thay thế |
-| 2 | Elasticsearch cho tìm kiếm | Lọc theo danh mục + phân trang trên PostgreSQL | Tốn RAM, cần pipeline đồng bộ chưa có; dữ liệu demo nhỏ | Hoãn |
+| 2 | Elasticsearch cho tìm kiếm | Tìm kiếm toàn văn bằng `tsvector` + GIN index trên PostgreSQL (không dấu, khớp tiền tố, sắp theo độ liên quan) | Tốn RAM, dữ liệu demo nhỏ; event `product.*` đã có để đồng bộ khi cần | Thay bằng `tsvector`, Elasticsearch hoãn |
 | 3 | Inventory là service riêng | Gộp vào **Order & Inventory**, chung `order_db` | Giữ hàng phải nguyên tử với tạo đơn; tách ra buộc phải làm giao dịch phân tán | Đã gộp |
 | 4 | Hoàn tiền (refund) | Không hoàn tiền tự động; đối soát thủ công | Là một luồng nghiệp vụ riêng phụ thuộc API từng cổng thanh toán | Hoãn |
 | 5 | Thông báo SMS | Chỉ email, gửi qua SMTP tới Mailpit (hộp thư giả lập, xem tại cổng 8025) | Cần nhà cung cấp trả phí; về kiến trúc không khác email | Hoãn |
 | 6 | CD qua SSH (`appleboy/ssh-action`) | CD dạng pull thay cho `appleboy/ssh-action` | Nhà cung cấp VPS chặn kết nối quốc tế vào cổng 22 (GitHub Actions báo `dial tcp :22 i/o timeout`) và chặn VPS kết nối ra hạ tầng Azure của GitHub Actions (`pipelines/broker.actions.githubusercontent.com` timeout), nên không dùng được SSH-push lẫn self-hosted runner. Giải pháp: GitHub Actions build và push image lên GHCR; trên VPS, cron chạy `scripts/auto-deploy.sh` mỗi 2 phút (`git fetch` + `docker compose pull`, có thay đổi thì `up -d --remove-orphans`). Mô hình giống GitOps (Argo CD, Flux). Độ trễ deploy tối đa khoảng 2 phút. | Đã thay thế |
 | 7 | Chứng chỉ SSL tự động qua HTTP-01 | Cấp qua DNS-01 (DuckDNS TXT), gia hạn thủ công mỗi 90 ngày | Nhà cung cấp VPS chặn kết nối quốc tế vào cổng 80 (đã xác nhận bằng tcpdump), khiến HTTP-01 challenge bị timeout; website chỉ truy cập được từ Việt Nam do nhà cung cấp chặn kết nối quốc tế. Giải pháp: Cấp SSL qua DNS-01 challenge (bản ghi TXT trên DuckDNS) không phụ thuộc cổng 80; gia hạn thủ công mỗi 90 ngày. | Đã thay thế |
-| 8 | Tích hợp cổng thanh toán thật (VNPAY/MoMo, QR) | `MockAdapter` sau interface `PaymentGatewayAdapter`: tạo phiên thanh toán giả, webhook ký HMAC-SHA256 (`X-Signature`) | Cổng thật cần đăng ký merchant, sandbox và URL webhook công khai nhận được kết nối quốc tế (VPS bị chặn, xem #6, #7). Phần cần chứng minh là luồng Saga và xử lý webhook an toàn (xác minh chữ ký, chống webhook lặp bằng `gateway_txn_id UNIQUE`, so khớp số tiền), không phụ thuộc cổng cụ thể. Thêm cổng thật chỉ là thêm một adapter. | Đã thay thế |
+| 8 | Tích hợp cổng thanh toán thật (VNPAY/MoMo, QR) | `MockAdapter` (webhook ký HMAC-SHA256) và **`VnpayAdapter` cho VNPAY sandbox** (URL thanh toán ký HMAC-SHA512, IPN + return URL) cùng sau interface `PaymentGatewayAdapter`; cả hai đi chung `WebhookService.applyResult` (chống lặp bằng `gateway_txn_id UNIQUE`, so khớp số tiền) | Môi trường thật cần hợp đồng merchant; sandbox chỉ cần đăng ký miễn phí. Máy chủ VNPAY ở Việt Nam nên IPN vào được VPS. Chạy local (VNPAY không gọi được localhost) thì return URL cũng áp kết quả sau khi kiểm chữ ký. MoMo / QR chưa làm. | Sandbox VNPAY |
 | 9 | Giám sát (monitoring) | Prometheus + Grafana trong Docker Compose, chỉ bind `127.0.0.1`; xem qua SSH tunnel. Nginx chặn `/actuator/*` trừ `/actuator/health` | Metrics lộ cấu trúc hệ thống nên không mở ra Internet; không cần thêm tên miền/chứng chỉ cho Grafana | Đã triển khai (thu gọn) |
 
 ## 3. Chi tiết từng điều chỉnh
@@ -41,10 +41,10 @@ Ba ràng buộc chi phối mọi điều chỉnh bên dưới:
 **Lý do**
 
 - **Chi phí tài nguyên.** Elasticsearch tự chạy trên JVM và cần heap riêng cỡ GB để hoạt động ổn định, tức là xấp xỉ gấp đôi một service ứng dụng. Thêm vào sẽ vượt ngân sách RAM đã tính ở mục 1.
-- **Cần pipeline đồng bộ dữ liệu.** Elasticsearch là bản sao để đọc; nguồn dữ liệu thật vẫn là `product_db`. Muốn kết quả tìm kiếm không trả về giá cũ hay sản phẩm đã ngừng bán, phải có cơ chế đẩy thay đổi sang (event `ProductSkuCreated`/`ProductUpdated` qua outbox). Cơ chế outbox cho Product hiện **chưa triển khai**, nên một Elasticsearch không được đồng bộ đúng sẽ gây sai lệch nhiều hơn lợi ích.
+- **Cần pipeline đồng bộ dữ liệu.** Elasticsearch là bản sao để đọc; nguồn dữ liệu thật vẫn là `product_db`. Muốn kết quả tìm kiếm không trả về giá cũ hay sản phẩm đã ngừng bán, phải đẩy mọi thay đổi sang qua outbox. Product đã có outbox nhưng mới phát `product.sku.created`; cần thêm `product.updated` / `product.deactivated` trước khi dựng read model.
 - **Quy mô dữ liệu chưa cần.** Dữ liệu demo có khoảng chục sản phẩm. `GET /api/v1/products?categoryId=&page=&size=` dùng index `idx_products_category_id` và phân trang của PostgreSQL là đủ.
 
-**Hướng mở rộng:** bước 1 là full-text search ngay trong PostgreSQL (`tsvector` + index GIN), không cần thêm hạ tầng. Bước 2, khi đã có outbox event của Product, mới đưa Elasticsearch vào như một read model tiêu thụ event đó.
+**Đã làm bước 1:** full-text search ngay trong PostgreSQL (`V5__product_full_text_search.sql`): cột `search_vector` generated từ tên (trọng số A) + mô tả (C) đã bỏ dấu, GIN index, `GET /products?q=`. Không thêm hạ tầng, tự cập nhật khi sửa sản phẩm. **Bước 2:** đưa Elasticsearch vào như một read model tiêu thụ event `product.*`.
 
 ### 3.3 Gộp Inventory vào Order — không có Inventory service riêng
 
@@ -88,7 +88,7 @@ Ba ràng buộc chi phối mọi điều chỉnh bên dưới:
 
 - **Không đa kho:** không có `location_id` hay phân bổ hàng theo kho; `orders.channel` (`WEB`/`MOBILE`) là kênh client tự khai, server không xác minh được.
 - **Không có** khuyến mại, thuế, phí vận chuyển động; `total_amount` = tổng `subtotal` các dòng hàng.
-- **`POST /orders` chưa có `Idempotency-Key`:** client retry có thể tạo đơn thứ hai. Cần bổ sung trước khi mở bán thật.
+- **`Idempotency-Key` là tùy chọn:** client không gửi header thì retry vẫn có thể tạo đơn thứ hai (giữ tương thích với Postman smoke / k6). Bảng `idempotency_keys` chưa có job dọn định kỳ.
 
 ## 5. Phần cốt lõi được giữ nguyên
 

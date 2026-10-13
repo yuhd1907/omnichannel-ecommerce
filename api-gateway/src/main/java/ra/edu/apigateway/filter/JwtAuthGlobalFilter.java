@@ -94,6 +94,10 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
         if (path.startsWith("/api/v1/webhooks/")) {
             return true;
         }
+        // VNPAY IPN (server-to-server) và return URL (trình duyệt) — xác thực bằng vnp_SecureHash
+        if (HttpMethod.GET.equals(method) && path.startsWith("/api/v1/payments/vnpay/")) {
+            return true;
+        }
 
         // 5. OpenAPI spec cho Swagger UI (chỉ đọc, không chứa dữ liệu người dùng)
         if (pathMatcher.match("/api-docs/*", path)) {

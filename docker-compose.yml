@@ -124,11 +124,17 @@ services:
     environment:
       <<: *java-env
       PRODUCT_DATASOURCE_URL: jdbc:postgresql://postgres:5432/product_db
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
     ports:
       - "${PRODUCT_PORT:-8082}:8082"
       - "${PRODUCT_GRPC_PORT:-9082}:9082"   # gRPC — mo ra ngoai de test bang grpcurl
     depends_on:
       postgres:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:8082/actuator/health || exit 1"]
@@ -195,6 +201,11 @@ services:
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
       JWT_SECRET: ${JWT_SECRET:-404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
       PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-dev-webhook-secret-key-12345}
+      # VNPAY sandbox (de trong = chi dung MOCK). Tren VPS dat trong .env:
+      #   VNPAY_RETURN_URL=https://<domain>/api/v1/payments/vnpay/return
+      VNPAY_TMN_CODE: ${VNPAY_TMN_CODE:-}
+      VNPAY_HASH_SECRET: ${VNPAY_HASH_SECRET:-}
+      VNPAY_RETURN_URL: ${VNPAY_RETURN_URL:-http://localhost:8080/api/v1/payments/vnpay/return}
     ports:
       - "${PAYMENT_PORT:-8084}:8084"
     depends_on:

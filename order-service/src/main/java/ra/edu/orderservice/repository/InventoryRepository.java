@@ -64,4 +64,18 @@ public interface InventoryRepository extends JpaRepository<Inventory, UUID> {
               AND i.reservedQty >= :q
             """)
     int release(@Param("sku") String skuCode, @Param("q") long quantity);
+
+    /**
+     * Tạo dòng kho rỗng (available = reserved = 0) cho SKU mới; đã có thì giữ nguyên.
+     * Dùng khi nhận event PRODUCT_SKU_CREATED — nhận lại event cũ không làm gì (idempotent).
+     *
+     * @return 1 nếu vừa tạo, 0 nếu SKU đã có dòng kho.
+     */
+    @Modifying
+    @Query(value = """
+            INSERT INTO inventory (sku_code, available_qty, reserved_qty, version)
+            VALUES (:sku, 0, 0, 0)
+            ON CONFLICT (sku_code) DO NOTHING
+            """, nativeQuery = true)
+    int createEmptyIfAbsent(@Param("sku") String skuCode);
 }

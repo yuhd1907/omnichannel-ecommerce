@@ -19,6 +19,7 @@ import ra.edu.orderservice.client.ProductClient;
 import ra.edu.orderservice.client.dto.AddressInfo;
 import ra.edu.orderservice.client.dto.ClientApiResponse;
 import ra.edu.orderservice.client.dto.SkuInfo;
+import ra.edu.orderservice.dto.CreateOrderResult;
 import ra.edu.orderservice.dto.OrderDto;
 import ra.edu.orderservice.dto.request.CreateOrderRequest;
 import ra.edu.orderservice.entity.Inventory;
@@ -38,6 +39,8 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -281,6 +284,114 @@ class OrderServiceImplTest {
     private Order pendingOrder(UUID orderId, UUID ownerId) {
         return Order.builder().id(orderId).userId(ownerId).channel("WEB").status("PENDING")
                 .shippingRecipientName("A").shippingPhone("0900000000").shippingAddress("HCM").build();
+    }
+
+    // ── Idempotency-Key ──────────────────────────────────────────────────
+
+    private CreateOrderRequest sku01x2() {
+        return new CreateOrderRequest("WEB", addressId,
+                List.of(new CreateOrderRequest.OrderItemRequest("SKU-01", 2L)));
+    }
+
+    private static OrderRepository.IdempotencyRecord record(String hash, UUID orderId) {
+        return new OrderRepository.IdempotencyRecord() {
+            @Override public String getRequestHash() { return hash; }
+            @Override public UUID getOrderId()       { return orderId; }
+        };
+    }
+
+    private Order existingOrder(UUID orderId) {
+        Order o = Order.builder().userId(userId).channel("WEB")
+                .shippingRecipientName("A").shippingPhone("0900000000").shippingAddress("x")
+                .totalAmount(new BigDecimal("400000.00")).build();
+        o.setId(orderId);
+        o.setItems(new java.util.ArrayList<>());
+        return o;
+    }
+
+    @Test
+    @DisplayName("Idempotency: key đã dùng với cùng nội dung -> trả đơn cũ (replayed), không gọi mạng, không giữ kho")
+    void createOrder_sameKeySameBody_replaysWithoutSideEffects() {
+        UUID orderId = UUID.randomUUID();
+        String hash = OrderServiceImpl.requestHash("WEB", addressId,
+                new java.util.TreeMap<>(java.util.Map.of("SKU-01", 2L)));
+        when(orderRepository.findIdempotencyRecord(userId, "key-1")).thenReturn(java.util.Optional.of(record(hash, orderId)));
+        when(orderRepository.findWithItemsById(orderId)).thenReturn(java.util.Optional.of(existingOrder(orderId)));
+
+        CreateOrderResult result = orderService.createOrder(userId, "buyer@example.com", sku01x2(), "key-1");
+
+        assertThat(result.replayed()).isTrue();
+        assertThat(result.order().id()).isEqualTo(orderId);
+        verifyNoInteractions(identityClient, productClient, redissonClient, inventoryRepository, transactionTemplate);
+    }
+
+    @Test
+    @DisplayName("Idempotency: cùng key nhưng khác nội dung -> 422 IDEMPOTENCY_KEY_REUSED")
+    void createOrder_sameKeyDifferentBody_422() {
+        when(orderRepository.findIdempotencyRecord(userId, "key-1"))
+                .thenReturn(java.util.Optional.of(record("hash-of-another-request", UUID.randomUUID())));
+
+        assertThatThrownBy(() -> orderService.createOrder(userId, "buyer@example.com", sku01x2(), "key-1"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo(ErrorCode.IDEMPOTENCY_KEY_REUSED);
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                });
+        verifyNoInteractions(identityClient, productClient, transactionTemplate);
+    }
+
+    @Test
+    @DisplayName("Idempotency: key mới -> tạo đơn và ghi key cùng transaction với đơn")
+    void createOrder_newKey_storesKeyInSameTransaction() throws Exception {
+        stubHappyPathForSku01();
+        when(orderRepository.findIdempotencyRecord(userId, "key-1")).thenReturn(java.util.Optional.empty());
+        when(orderRepository.insertIdempotencyKey(any(), any(), any(), any())).thenReturn(1);
+
+        CreateOrderResult result = orderService.createOrder(userId, "buyer@example.com", sku01x2(), "key-1");
+
+        assertThat(result.replayed()).isFalse();
+        verify(orderRepository).insertIdempotencyKey(eq(userId), eq("key-1"), any(), eq(result.order().id()));
+        verify(inventoryRepository).reserve("SKU-01", 2L);
+    }
+
+    @Test
+    @DisplayName("Idempotency: request song song cùng key thắng trước -> rollback đơn của mình, trả đơn kia")
+    void createOrder_concurrentDuplicate_returnsWinnerOrder() throws Exception {
+        stubHappyPathForSku01();
+        UUID winnerId = UUID.randomUUID();
+        String hash = OrderServiceImpl.requestHash("WEB", addressId,
+                new java.util.TreeMap<>(java.util.Map.of("SKU-01", 2L)));
+        when(orderRepository.findIdempotencyRecord(userId, "key-1"))
+                .thenReturn(java.util.Optional.empty())                       // lần kiểm tra đầu: chưa có
+                .thenReturn(java.util.Optional.of(record(hash, winnerId)));   // sau khi va chạm khóa chính
+        when(orderRepository.insertIdempotencyKey(any(), any(), any(), any())).thenReturn(0);
+        when(orderRepository.findWithItemsById(winnerId)).thenReturn(java.util.Optional.of(existingOrder(winnerId)));
+
+        CreateOrderResult result = orderService.createOrder(userId, "buyer@example.com", sku01x2(), "key-1");
+
+        assertThat(result.replayed()).isTrue();
+        assertThat(result.order().id()).isEqualTo(winnerId);
+        verify(inventoryRepository, never()).reserve(any(), anyLong());   // ném trước bước giữ kho
+        verify(outboxEventRepository, never()).save(any());
+        verify(mockLock).unlock();
+    }
+
+    private void stubHappyPathForSku01() throws Exception {
+        AddressInfo addressInfo = new AddressInfo(
+                addressId, userId, "Nguyen Van A", "0987654321", "123 Le Loi", "Ben Nghe", "Quan 1", "TP HCM", true);
+        when(identityClient.getAddress(addressId)).thenReturn(new ClientApiResponse<>("SUCCESS", "OK", addressInfo));
+        when(productClient.getSkuInfos(List.of("SKU-01")))
+                .thenReturn(List.of(new SkuInfo("SKU-01", "Ao Polo", new BigDecimal("200000.00"), "ACTIVE")));
+        when(redissonClient.getLock("lock:inventory:SKU-01")).thenReturn(mockLock);
+        when(mockLock.tryLock(3L, TimeUnit.SECONDS)).thenReturn(true);
+        when(mockLock.isHeldByCurrentThread()).thenReturn(true);
+        when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> {
+            Order o = invocation.getArgument(0);
+            o.setId(UUID.randomUUID());
+            return o;
+        });
+        lenient().when(inventoryRepository.reserve("SKU-01", 2L)).thenReturn(1);
     }
 
     @Test

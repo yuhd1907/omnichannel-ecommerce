@@ -99,6 +99,20 @@ public class WebhookService {
                     "Webhook status must be SUCCESS or FAILED, got: " + payload.status(), HttpStatus.BAD_REQUEST);
         }
 
+        // 5-8. Áp kết quả vào payment (dùng chung với VNPAY IPN và trang thanh toán MOCK)
+        return applyResult(payload, new String(body, StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Áp kết quả thanh toán ĐÃ được xác thực (chữ ký đúng) vào payment: kiểm số tiền, ghi giao
+     * dịch (chống lặp bằng gateway_txn_id UNIQUE), chuyển payment khỏi PENDING và ghi outbox.
+     * Dùng chung cho webhook JSON, VNPAY IPN/return và trang thanh toán MOCK.
+     *
+     * @param rawJson nội dung gốc từ cổng, lưu vào payment_transactions.raw_response (jsonb)
+     * @throws BusinessException 404 PAYMENT_NOT_FOUND, 400 AMOUNT_MISMATCH
+     */
+    @Transactional
+    public Result applyResult(WebhookPayload payload, String rawJson) {
         // 5. Payment theo orderId
         Payment payment = paymentRepository.findByOrderId(payload.orderId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.PAYMENT_NOT_FOUND,
@@ -113,9 +127,8 @@ public class WebhookService {
         }
 
         // 7. Ghi giao dịch; 0 = gateway_txn_id đã có -> webhook lặp, trả 200 và dừng
-        String raw = new String(body, StandardCharsets.UTF_8);
         int inserted = transactionRepository.insertIfAbsent(
-                payment.getId(), payload.gatewayTxnId(), payload.status(), payload.amount(), raw);
+                payment.getId(), payload.gatewayTxnId(), payload.status(), payload.amount(), rawJson);
         if (inserted == 0) {
             log.info("Duplicate webhook ignored: txn={} orderId={}", payload.gatewayTxnId(), payload.orderId());
             return Result.DUPLICATE;

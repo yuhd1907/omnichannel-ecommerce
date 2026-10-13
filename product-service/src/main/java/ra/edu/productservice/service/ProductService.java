@@ -20,6 +20,9 @@ public interface ProductService {
 
     PageData<ProductSummaryDto> getProducts(UUID categoryId, Pageable pageable);
 
+    /** Tìm kiếm toàn văn theo tên/mô tả (bỏ dấu, khớp tiền tố), sắp theo độ liên quan. */
+    PageData<ProductSummaryDto> searchProducts(String keyword, UUID categoryId, Pageable pageable);
+
     ProductDetailDto getProductById(UUID id);
 
     ProductDetailDto createProduct(CreateProductRequest request);

@@ -1,5 +1,6 @@
 package ra.edu.paymentservice.controller;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -29,10 +30,11 @@ public class PaymentController {
     public ResponseEntity<ApiResponse<PaymentView>> checkout(
             @PathVariable UUID orderId,
             @Valid @RequestBody CheckoutRequest request,
-            Authentication authentication) {
+            Authentication authentication,
+            HttpServletRequest httpRequest) {
 
         UUID userId = UUID.fromString(authentication.getName());
-        PaymentView view = paymentService.checkout(orderId, userId, request);
+        PaymentView view = paymentService.checkout(orderId, userId, request, clientIp(httpRequest));
         return ResponseEntity
                 .status(HttpStatus.CREATED)
                 .body(ApiResponse.success(view));
@@ -54,5 +56,17 @@ public class PaymentController {
 
         PaymentView view = paymentService.getPayment(orderId, userId, isAdmin);
         return ResponseEntity.ok(ApiResponse.success(view));
+    }
+
+    /**
+     * IP người mua: request đi qua Nginx -> gateway nên lấy IP đầu tiên trong X-Forwarded-For
+     * (gateway tự thêm header này); gọi thẳng service thì dùng remoteAddr.
+     */
+    static String clientIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            return forwarded.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 }

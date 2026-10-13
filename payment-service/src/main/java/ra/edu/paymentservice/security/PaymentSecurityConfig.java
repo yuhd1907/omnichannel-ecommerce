@@ -52,6 +52,8 @@ public class PaymentSecurityConfig {
                         // OpenAPI spec cho Swagger UI ở gateway
                         .requestMatchers("/v3/api-docs", "/v3/api-docs/**").permitAll()
                         .requestMatchers("/api/v1/webhooks/**").permitAll()
+                        // VNPAY IPN / return URL: xác thực bằng chữ ký vnp_SecureHash, không có JWT
+                        .requestMatchers("/api/v1/payments/vnpay/**").permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )

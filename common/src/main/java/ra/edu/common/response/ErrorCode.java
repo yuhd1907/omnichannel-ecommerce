@@ -24,6 +24,7 @@ public final class ErrorCode {
     public static final String INVENTORY_BUSY = "INVENTORY_BUSY";
     public static final String ORDER_NOT_CANCELLABLE = "ORDER_NOT_CANCELLABLE";
     public static final String INVALID_STATUS_TRANSITION = "INVALID_STATUS_TRANSITION";
+    public static final String IDEMPOTENCY_KEY_REUSED = "IDEMPOTENCY_KEY_REUSED";
 
     // Payment
     public static final String PAYMENT_ALREADY_COMPLETED = "PAYMENT_ALREADY_COMPLETED";
@@ -33,6 +34,7 @@ public final class ErrorCode {
     public static final String INVALID_SIGNATURE = "INVALID_SIGNATURE";
     public static final String AMOUNT_MISMATCH = "AMOUNT_MISMATCH";
     public static final String PAYMENT_CLOSED = "PAYMENT_CLOSED";
+    public static final String PAYMENT_GATEWAY_NOT_CONFIGURED = "PAYMENT_GATEWAY_NOT_CONFIGURED";
 
     // Chung
     public static final String UNAUTHORIZED = "UNAUTHORIZED";

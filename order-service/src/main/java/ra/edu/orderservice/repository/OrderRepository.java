@@ -72,4 +72,35 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
 
     /** Danh sách đơn theo trạng thái (admin). */
     Page<Order> findByStatus(String status, Pageable pageable);
+
+    // ── Idempotency-Key cho POST /orders (bảng idempotency_keys, migration V3) ──────────────
+
+    /** Bản ghi key đã dùng: nội dung đơn (hash) và đơn đã tạo. */
+    interface IdempotencyRecord {
+        String getRequestHash();
+        UUID getOrderId();
+    }
+
+    @Query(value = """
+            SELECT request_hash AS "requestHash", order_id AS "orderId"
+            FROM idempotency_keys
+            WHERE user_id = :userId AND idem_key = :key
+            """, nativeQuery = true)
+    Optional<IdempotencyRecord> findIdempotencyRecord(@Param("userId") UUID userId, @Param("key") String key);
+
+    /**
+     * Ghi key CÙNG transaction với đơn. Hai request trùng key chạy song song: request sau chờ
+     * khóa của khóa chính tới khi request trước commit, rồi nhận 0 -> rollback đơn của mình và
+     * trả lại đơn của request trước.
+     *
+     * @return 1 nếu ghi được, 0 nếu key đã tồn tại
+     */
+    @Modifying
+    @Query(value = """
+            INSERT INTO idempotency_keys (user_id, idem_key, request_hash, order_id)
+            VALUES (:userId, :key, :hash, :orderId)
+            ON CONFLICT DO NOTHING
+            """, nativeQuery = true)
+    int insertIdempotencyKey(@Param("userId") UUID userId, @Param("key") String key,
+                             @Param("hash") String requestHash, @Param("orderId") UUID orderId);
 }

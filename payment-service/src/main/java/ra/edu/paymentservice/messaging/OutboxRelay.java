@@ -9,7 +9,6 @@ import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.core.ReturnedMessage;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -20,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -36,8 +36,10 @@ import java.util.concurrent.TimeoutException;
  * Gửi payload dạng byte (không qua MessageConverter): payload đã là JSON trong outbox, tránh
  * phụ thuộc converter Jackson 2/3 của Spring AMQP. messageId = outbox.id để consumer chống trùng.
  *
- * Hạn chế đã biết: chạy >= 2 instance thì các relay có thể đọc cùng event và gửi trùng
- * (cần SELECT ... FOR UPDATE SKIP LOCKED). Consumer vì vậy luôn phải idempotent.
+ * Chạy nhiều instance: mỗi lượt nhận lô bằng FOR UPDATE SKIP LOCKED + locked_until (claimBatch),
+ * nên các instance không gửi trùng nhau. Vẫn có thể trùng khi instance chết sau publish mà trước
+ * markSent (at-least-once) -> consumer luôn phải idempotent. Thứ tự giữa các event của cùng một
+ * aggregate không còn tuyệt đối khi nhiều instance chạy song song.
  */
 @Slf4j
 @Component
@@ -47,6 +49,8 @@ public class OutboxRelay {
     static final int  BATCH_SIZE              = 50;
     static final int  MAX_RETRY               = 10;
     static final long CONFIRM_TIMEOUT_SECONDS = 5;
+    /** Thời gian một instance "giữ" lô đã nhận; quá hạn (instance chết) thì instance khác nhận lại. */
+    static final int  CLAIM_SECONDS           = 60;
 
     static final String STATUS_PENDING = "PENDING";
 
@@ -65,15 +69,32 @@ public class OutboxRelay {
 
     @Scheduled(fixedDelay = 1000)
     public void relay() {
-        List<OutboxEvent> batch = outboxEventRepository
-                .findByStatusOrderByCreatedAtAsc(STATUS_PENDING, Pageable.ofSize(BATCH_SIZE));
+        List<OutboxEvent> batch = claimBatch();
 
-        for (OutboxEvent event : batch) {
+        for (int i = 0; i < batch.size(); i++) {
             // Broker chết/treo: dừng batch, lượt sau thử lại — không đốt retry của cả batch.
-            if (publish(event) == Outcome.BROKER_UNAVAILABLE) {
+            if (publish(batch.get(i)) == Outcome.BROKER_UNAVAILABLE) {
+                List<UUID> unsent = batch.subList(i, batch.size()).stream().map(OutboxEvent::getId).toList();
+                transactionTemplate.executeWithoutResult(status -> outboxEventRepository.release(unsent));
                 break;
             }
         }
+    }
+
+    /**
+     * Nhận một lô event bằng SELECT ... FOR UPDATE SKIP LOCKED + đặt locked_until, trong một
+     * transaction ngắn. Hai instance chạy cùng lúc sẽ nhận hai lô KHÁC nhau -> không gửi trùng.
+     */
+    List<OutboxEvent> claimBatch() {
+        List<OutboxEvent> batch = transactionTemplate.execute(status -> {
+            List<UUID> ids = outboxEventRepository.lockPendingIds(BATCH_SIZE);
+            if (ids.isEmpty()) {
+                return List.<OutboxEvent>of();
+            }
+            outboxEventRepository.claim(ids, CLAIM_SECONDS);
+            return outboxEventRepository.findByIdInOrderByCreatedAtAsc(ids);
+        });
+        return batch == null ? List.of() : batch;
     }
 
     Outcome publish(OutboxEvent event) {
