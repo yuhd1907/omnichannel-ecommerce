@@ -22,7 +22,7 @@ Yêu cầu kỹ thuật trọng tâm:
 | API | Hơn 30 endpoint REST, 2 RPC gRPC, spec OpenAPI 3.1 sinh từ code (`docs/api/`) |
 | Event | 8 loại event qua RabbitMQ (5 `order.*`, 2 `payment.*`, 1 `product.*`), mỗi queue có DLQ |
 | Kiểm thử | 145 unit test chạy trong CI + 39 integration test; smoke test end-to-end (`scripts/smoke-test.mjs`); 2 kịch bản k6 |
-| Load test | Giữ **1000 req/s** đặt hàng qua gateway (trung vị 10 ms); 66.784 request, kho 1000 → đúng 1000 đơn, không bán vượt |
+| Load test | Tải mục tiêu **1000 req/s** đặt hàng qua gateway: giữ đúng (66.784 request, kho 1000 → đúng 1000 đơn, không bán vượt), từ chối khi hết hàng trung vị 10 ms. Đơn thành công khoảng 30/giây cho một SKU nóng; **chưa chứng minh** 500–1.000 đơn thành công/giây |
 | Triển khai | VPS thật, HTTPS, CI/CD tự động: https://huyecommerce.duckdns.org |
 
 ## 3. Đã làm được
@@ -65,8 +65,9 @@ Yêu cầu kỹ thuật trọng tâm:
 - **`Idempotency-Key`** cho `POST /orders`: bảng `idempotency_keys` (khóa chính `user_id + key`) ghi trong cùng transaction với đơn. Gửi lại cùng key → trả đúng đơn cũ (200, `Idempotent-Replayed: true`), không giữ kho lần hai; hai request trùng key chạy song song thì một bên chờ ở khóa chính rồi nhận đơn của bên kia; dùng lại key cho nội dung khác → 422.
 - **Load test qua gateway:** tăng dần tới 1000 req/s.
   - Kết quả: đúng 1000 đơn cho kho 1000, 4 điều kiện bảo toàn kho đều đạt.
-  - Giai đoạn hết hàng giữ 1000 req/s với trung vị 10 ms.
+  - Giai đoạn hết hàng giữ 1000 req/s với trung vị 10 ms (gần như toàn bộ là `409 OUT_OF_STOCK` trả sớm).
   - Giai đoạn còn hàng bán khoảng 30 đơn/giây cho một SKU nóng, vì các đơn phải đi tuần tự qua khóa. Đây là đánh đổi chọn tính đúng ([chi tiết](Flashsale_Results.md#load-test-thông-lượng-qua-gateway-13102026)).
+  - **Phạm vi kết luận:** hệ thống giữ được tính đúng đắn dưới tải mục tiêu 1.000 request/giây và xử lý nhanh đường từ chối khi hết hàng; chưa chứng minh được khả năng tạo 500–1.000 đơn thành công mỗi giây. Lần chạy còn 65 timeout và threshold `other_status == 0` của k6 FAIL.
 
 ### 3.4 Bảo mật
 
@@ -99,7 +100,8 @@ Yêu cầu kỹ thuật trọng tâm:
 | **CD qua SSH** | CD kiểu pull (cron 2 phút). SSL nay đã cấp bằng HTTP-01 và tự gia hạn như đề tài | Nhà cung cấp VPS chặn kết nối quốc tế vào cổng 22 (đã xác minh bằng tcpdump) |
 
 **Hạn chế đã biết:**
-- Lần gọi đầu tiên sau khi service khởi động có thể trả 503 (khởi tạo gRPC/Feign chậm), gửi lại là được.
+- Lỗi `503` ở lần gọi Feign đầu tiên sau khi khởi động **đã sửa** (làm nóng lúc khởi động + thử lại 1 lần, [chi tiết](Flashsale_Results.md#phát-hiện-phụ-lỗi-503-ở-lần-chạy-đầu-sau-khi-khởi-động-đã-sửa)); lời gọi gRPC đầu tiên vẫn chậm hơn bình thường.
+- Load test chưa chứng minh được 500–1.000 đơn thành công/giây (xem 3.1).
 - Web chỉ truy cập được từ Việt Nam.
 
 ## 5. Đã bổ sung sau bản demo đầu (nhánh `feature/mo-rong`)
@@ -108,6 +110,7 @@ Yêu cầu kỹ thuật trọng tâm:
 2. Outbox phía Product: SKU mới tự có dòng kho ở order-service.
 3. VNPAY sandbox qua `PaymentGatewayAdapter` có sẵn (IPN + return URL).
 4. Tìm kiếm toàn văn bằng `tsvector` (Elasticsearch để bước sau).
+5. Sửa lỗi `503` lúc order-service vừa khởi động: `FeignWarmup` + thử lại 1 lần khi lỗi tạm thời.
 
 ## 6. Hướng phát triển tiếp
 

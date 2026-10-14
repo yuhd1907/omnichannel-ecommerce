@@ -46,14 +46,18 @@ k6 tự đánh dấu **FAIL** nếu `created_201 ≠ 10` hoặc có bất kỳ m
 - **Lock không làm chậm đáng kể ở quy mô này.** p95 781 ms (bật) so với 738 ms (tắt). Lock tuần tự hóa phần giao dịch kho; giả thuyết là phần này ngắn so với các lời gọi trước lock (Feign lấy địa chỉ, gRPC lấy giá) nên ít ảnh hưởng tới p95. Chưa đo tách từng đoạn; muốn khẳng định cần log thời gian từng bước hoặc tracing. Không request nào phải chờ lock quá 3 giây (`INVENTORY_BUSY = 0`).
 - **Lock có giá trị khi tranh chấp lớn hơn:** khi tắt lock, cả 100 request cùng mở transaction và tranh một dòng `inventory`, giữ connection trong lúc chờ khóa dòng. Ở 100 request với pool 20 thì chưa thấy lỗi chờ connection; tải lớn hơn hoặc pool nhỏ hơn sẽ làm lớp này lộ ra trước.
 
-## Phát hiện phụ: lỗi 503 ở lần chạy đầu sau khi khởi động
+## Phát hiện phụ: lỗi 503 ở lần chạy đầu sau khi khởi động (đã sửa)
 
 Lần chạy đầu tiên (lock bật, ngay sau khi container order-service vừa được tạo lại) cho **10 × 201, 50 × 409, 40 × 503 `IDENTITY_SERVICE_UNAVAILABLE`**, p95 2,64 giây. Kho vẫn đúng `0 | 10`, `10 | 10`.
 
 - **Nguyên nhân:** cả 40 lỗi đều là `'messageConverters' must not be empty` từ Spring Cloud OpenFeign. Feign khởi tạo `HttpMessageConverters` theo kiểu lazy và không thread-safe; loạt 100 request là lời gọi Feign đầu tiên sau khi khởi động, nên một phần thread thấy danh sách converter còn rỗng.
 - **Không liên quan đến tải:** chạy lại khi service đã "ấm" thì 0 lỗi.
 - **Trong thử nghiệm:** `setup()` của k6 gọi một đơn với SKU không tồn tại để khởi tạo Feign trước (trả 400, không đụng tới kho).
-- **Còn tồn tại trong sản phẩm:** sau mỗi lần deploy, nếu đợt request đầu tiên đến đồng thời thì một phần sẽ nhận 503. Hướng sửa: gọi Feign một lần lúc khởi động (`ApplicationRunner`), hoặc nâng Spring Cloud (order-service đang dùng BOM `2025.1.2`, gateway dùng `2025.1.3`) nếu bản mới đã sửa.
+- **Đã sửa trong sản phẩm (15/10/2026), hai lớp:**
+  - **Làm nóng lúc khởi động:** `FeignWarmup` (`ApplicationRunner`) gọi `GET /actuator/health` của identity một lần, tuần tự, ngay khi order-service khởi động. Response 200 có body JSON nên đi qua đúng bước decode; phần khởi tạo lười chạy xong trên một thread trước khi có traffic. Lỗi ở bước này chỉ ghi log, không chặn khởi động.
+  - **Thử lại 1 lần:** `OrderServiceImpl.callIdentity` thử lại đúng 1 lần (nghỉ 100 ms, cấu hình `order.identity.retry-delay-ms`) khi lỗi là tạm thời: lỗi decode, lỗi mạng, `5xx`. `404` vẫn trả `ADDRESS_NOT_FOUND`; `4xx` khác không thử lại. Lời gọi là `GET` nên thử lại an toàn. Lớp này che khe hở nhỏ giữa lúc Tomcat nhận request và lúc warm-up chạy xong.
+  - **Unit test:** `OrderServiceImplTest` (lỗi decode lần đầu → thử lại rồi thành công; `503` liên tiếp → gọi đúng 2 lần rồi trả `503`, không lấy lock, không đụng kho; `400` → không thử lại) và `FeignWarmupTest`.
+  - **Chưa đo lại bằng k6** ngay sau khi tạo lại container. Cách kiểm chứng: `docker compose up -d --force-recreate order-service`, chờ healthy, tạm bỏ bước làm nóng trong `setup()` của `flashsale-k6.js` rồi chạy; kỳ vọng `0 × 503`.
 
 ---
 
@@ -76,12 +80,19 @@ Lần chạy đầu tiên (lock bật, ngay sau khi container order-service vừ
 | `409 OUT_OF_STOCK` | 64.574 |
 | `409 INVENTORY_BUSY` (chờ lock quá 3 giây) | 1.145 |
 | Lỗi khác | 65 (các mẫu log đều là timeout 10 giây phía k6, status 0); không có `429` |
-| Tải đỉnh giữ được | **1000 req/s** trong 30 giây, chỉ khoảng 10 VU đang chờ cùng lúc |
+| Tải đỉnh giữ được | **1000 req/s** trong 30 giây, chỉ khoảng 10 VU đang chờ cùng lúc (lúc này kho đã hết, gần như toàn bộ là `409` trả sớm) |
 | Độ trễ | trung vị **10 ms**, p90 161 ms, p95 971 ms, p99 5,8 s |
 | `dropped_iterations` | 1.215 (1,8%), đều ở giai đoạn còn hàng |
 | Kiểm tra kho (`load-verify.sql`) | `0 \| 1000`; 1000 đơn `PENDING`; **cả 4 điều kiện `t`**: không âm, giữ khớp đơn, bảo toàn kho, không bán vượt |
 
 Threshold `other_status == 0` của k6 báo **FAIL** vì 65 timeout ở trên; threshold được giữ nguyên để không che lỗi.
+
+### Phạm vi kết luận
+
+- **Đã chứng minh:** hệ thống giữ được tính đúng đắn dưới tải mục tiêu 1.000 request/giây và xử lý nhanh đường từ chối khi hết hàng (không bán vượt, không âm kho, 4 điều kiện bảo toàn kho đều đạt; đường từ chối khi hết hàng trung vị 10 ms).
+- **Chưa chứng minh:** khả năng tạo **500–1.000 đơn thành công mỗi giây**. Đơn thành công chỉ khoảng **30 đơn/giây** cho một SKU nóng; phần lớn 1.000 req/s ở giai đoạn đỉnh là `409 OUT_OF_STOCK` trả sớm.
+- **Lần chạy chưa sạch:** 65 timeout, 1.215 `dropped_iterations` (1,8%), threshold `other_status == 0` FAIL. Chạy 1 lần trên laptop, k6 chung máy với hệ thống.
+- Câu nên dùng: *"Hệ thống giữ được tính đúng đắn dưới tải mục tiêu 1.000 request/giây và xử lý nhanh đường từ chối khi hết hàng; chưa chứng minh được khả năng tạo 500–1.000 đơn thành công mỗi giây."* Không nói "chịu được 1.000 đơn/giây".
 
 ### Đọc kết quả: hai giai đoạn khác hẳn nhau
 

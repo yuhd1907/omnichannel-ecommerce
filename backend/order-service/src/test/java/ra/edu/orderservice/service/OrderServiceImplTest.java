@@ -393,6 +393,93 @@ class OrderServiceImplTest {
         lenient().when(inventoryRepository.reserve("SKU-01", 2L)).thenReturn(1);
     }
 
+    // ── Gọi identity: thử lại 1 lần khi lỗi tạm thời (cold-start Feign) ──────
+
+    private static feign.Request identityRequest() {
+        return feign.Request.create(feign.Request.HttpMethod.GET,
+                "http://identity-service/internal/addresses/x",
+                java.util.Map.of(), null, java.nio.charset.StandardCharsets.UTF_8, null);
+    }
+
+    private ClientApiResponse<AddressInfo> addressOk() {
+        return new ClientApiResponse<>("SUCCESS", "OK", new AddressInfo(
+                addressId, userId, "Nguyen Van A", "0987654321", "123 Le Loi", "Ben Nghe", "Quan 1", "TP HCM", true));
+    }
+
+    /** Như stubHappyPathForSku01 nhưng KHÔNG stub identity (từng test tự stub). */
+    private void stubAfterIdentityForSku01() throws Exception {
+        when(productClient.getSkuInfos(List.of("SKU-01")))
+                .thenReturn(List.of(new SkuInfo("SKU-01", "Ao Polo", new BigDecimal("200000.00"), "ACTIVE")));
+        when(redissonClient.getLock("lock:inventory:SKU-01")).thenReturn(mockLock);
+        when(mockLock.tryLock(3L, TimeUnit.SECONDS)).thenReturn(true);
+        when(mockLock.isHeldByCurrentThread()).thenReturn(true);
+        when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> {
+            Order o = invocation.getArgument(0);
+            o.setId(UUID.randomUUID());
+            return o;
+        });
+        when(inventoryRepository.reserve("SKU-01", 2L)).thenReturn(1);
+    }
+
+    private void assertIdentityUnavailable(Runnable call) {
+        assertThatThrownBy(call::run)
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo("IDENTITY_SERVICE_UNAVAILABLE");
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                });
+    }
+
+    @Test
+    @DisplayName("Identity lỗi decode lần đầu ('messageConverters' must not be empty) -> thử lại 1 lần, đặt hàng thành công")
+    void createOrder_identityDecodeErrorOnce_retriesAndSucceeds() throws Exception {
+        org.springframework.test.util.ReflectionTestUtils.setField(orderService, "identityRetryDelayMs", 0L);
+        when(identityClient.getAddress(addressId))
+                .thenThrow(new feign.codec.DecodeException(200, "'messageConverters' must not be empty", identityRequest()))
+                .thenReturn(addressOk());
+        stubAfterIdentityForSku01();
+
+        OrderDto result = orderService.createOrder(userId, "buyer@example.com", sku01x2());
+
+        assertThat(result.status()).isEqualTo("PENDING");
+        verify(identityClient, times(2)).getAddress(addressId);
+    }
+
+    @Test
+    @DisplayName("Identity 503 liên tiếp -> thử lại đúng 1 lần rồi trả 503, không lấy lock / không đụng kho")
+    void createOrder_identityDownTwice_503AfterOneRetry() {
+        org.springframework.test.util.ReflectionTestUtils.setField(orderService, "identityRetryDelayMs", 0L);
+        when(identityClient.getAddress(addressId)).thenThrow(new feign.FeignException.ServiceUnavailable(
+                "down", identityRequest(), new byte[0], java.util.Map.of()));
+
+        assertIdentityUnavailable(() -> orderService.createOrder(userId, "buyer@example.com", sku01x2()));
+
+        verify(identityClient, times(2)).getAddress(addressId);
+        verifyNoInteractions(redissonClient, transactionTemplate);
+    }
+
+    @Test
+    @DisplayName("Identity 400 (lỗi của request) -> không thử lại")
+    void createOrder_identityBadRequest_noRetry() {
+        when(identityClient.getAddress(addressId)).thenThrow(new feign.FeignException.BadRequest(
+                "bad", identityRequest(), new byte[0], java.util.Map.of()));
+
+        assertIdentityUnavailable(() -> orderService.createOrder(userId, "buyer@example.com", sku01x2()));
+
+        verify(identityClient, times(1)).getAddress(addressId);
+    }
+
+    @Test
+    @DisplayName("isTransient: decode/mạng/5xx -> thử lại; 4xx -> không")
+    void isTransient_classifiesStatus() {
+        assertThat(OrderServiceImpl.isTransient(new feign.codec.DecodeException(200, "x", identityRequest()))).isTrue();
+        assertThat(OrderServiceImpl.isTransient(new feign.FeignException.InternalServerError(
+                "x", identityRequest(), new byte[0], java.util.Map.of()))).isTrue();
+        assertThat(OrderServiceImpl.isTransient(new feign.FeignException.Forbidden(
+                "x", identityRequest(), new byte[0], java.util.Map.of()))).isFalse();
+    }
+
     @Test
     @DisplayName("cancelOrder: không phải chủ đơn -> 404, không chạm trạng thái")
     void cancelOrder_notOwner_404() {

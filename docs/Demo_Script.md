@@ -51,7 +51,7 @@ curl -s https://huyecommerce.duckdns.org/actuator/health; echo
 
 ### 0.3 Làm nóng và chuẩn bị tài khoản
 
-Lần gọi Feign/gRPC đầu tiên sau khi khởi động chậm, có thể trả 503. Chạy smoke test một lần trên máy mình (đi hết đăng ký → đặt hàng → thanh toán → `CONFIRMED`, in `OK` từng bước):
+Order-service tự làm nóng Feign lúc khởi động và thử lại 1 lần khi identity lỗi tạm thời, nên không còn `503` ở đơn đầu; lời gọi gRPC đầu tiên vẫn hơi chậm. Chạy smoke test một lần trên máy mình (đi hết đăng ký → đặt hàng → thanh toán → `CONFIRMED`, in `OK` từng bước):
 
 ```powershell
 # [PS] thư mục gốc repo
@@ -211,9 +211,10 @@ Khoảng 30–60 giây sau khi service healthy: queue về 0, Mailpit nhận th�
 - **Log tập trung (Loki):** Grafana → *Explore* → Loki → `{service="order-service"}` hoặc `{level="ERROR"}`. Log của 16 container về một chỗ, không cần `docker logs` từng cái.
 - **Trace (Jaeger):** đặt 1 đơn trên web, mở DevTools → response có `traceId` → dán vào Jaeger. Trace `POST /api/v1/orders` có khoảng 8 span: gateway (kèm Redis rate limit) → order-service → identity (Feign, lấy địa chỉ) và product (gRPC `BatchGetSkus`). Từ span bấm *Logs for this span* để xem log cùng traceId trong Loki.
 - **Load test** (đã chạy 13/10 trên máy local, chi tiết ở `Flashsale_Results.md`). Mở ảnh Grafana và tổng kết k6 đã chụp, nói 3 ý:
-  1. Đúng 1000 đơn cho kho 1000 dưới tải 1000 req/s; `load-verify.sql` cả 4 cột `t`.
+  1. Đúng 1000 đơn cho kho 1000 dưới tải mục tiêu 1000 req/s; `load-verify.sql` cả 4 cột `t`.
   2. Hết hàng: giữ 1000 req/s, trung vị 10 ms, nhờ bước từ chối sớm.
   3. Còn hàng: khoảng 30 đơn/giây cho một SKU, vì các đơn cùng SKU đi tuần tự qua khóa. Chọn đúng trước nhanh sau; nêu hướng cải thiện.
+  4. Nói rõ phạm vi: "Hệ thống giữ được tính đúng đắn dưới tải mục tiêu 1.000 request/giây và xử lý nhanh đường từ chối khi hết hàng; chưa chứng minh được khả năng tạo 500–1.000 đơn thành công mỗi giây." Không nói "chịu 1000 đơn/giây".
 - Kết quả tính đúng 100 người / kho 10: `docs/Flashsale_Results.md`.
 
 ## 9. CI/CD (1 phút)
@@ -235,7 +236,7 @@ Nói lý do không dùng SSH-push: nhà cung cấp VPS chặn kết nối quốc
 | Câu hỏi | Trả lời ngắn |
 | --- | --- |
 | Sao không bán vượt kho khi 1000 người mua cùng lúc? | `UPDATE inventory ... WHERE available_qty >= :q` (PostgreSQL khóa dòng) + `CHECK (available_qty >= 0)`. Redisson lock chỉ giảm tranh chấp, tắt lock vẫn đúng (Flashsale_Results lần 2). |
-| Chịu 1000 req/s mà sao chỉ bán khoảng 30 đơn/giây? | Mọi đơn mua cùng một SKU nên phải đi tuần tự qua khóa kho; đó là cái giá của "không bán vượt". Request chờ quá 3 giây nhận `409 INVENTORY_BUSY` để client thử lại, không treo. Muốn nhanh hơn: chia kho một SKU thành nhiều dòng, hoặc xếp hàng đơn qua queue. |
+| Chịu 1000 req/s mà sao chỉ bán khoảng 30 đơn/giây? | 1000 req/s là tải đến; ở đỉnh, kho đã hết nên gần như toàn bộ là `409` trả sớm. Em chỉ khẳng định giữ đúng dưới tải đó, chưa chứng minh 500–1.000 đơn thành công/giây. Mọi đơn mua cùng một SKU nên phải đi tuần tự qua khóa kho; đó là cái giá của "không bán vượt". Request chờ quá 3 giây nhận `409 INVENTORY_BUSY` để client thử lại, không treo. Muốn nhanh hơn: chia kho một SKU thành nhiều dòng, hoặc xếp hàng đơn qua queue. |
 | Event gửi 2 lần thì sao? | Consumer idempotent: notification ghi `processed_messages(messageId)` cùng transaction; payment có `order_id UNIQUE`, `gateway_txn_id UNIQUE`. |
 | Sao không publish thẳng lên RabbitMQ? | DB commit mà broker chết thì mất event (hoặc ngược lại). Outbox ghi cùng transaction, relay gửi sau, có publisher confirm. Demo mục 7. |
 | Thanh toán thật? | VNPAY sandbox qua `VnpayAdapter` (ký HMAC-SHA512, IPN + return URL), cùng interface `PaymentGatewayAdapter` với MOCK; cả hai đi chung một hàm áp kết quả có chống lặp. Môi trường thật chỉ khác TMN code / secret (Scope_Adjustments mục 8). |
@@ -249,7 +250,7 @@ Nói lý do không dùng SSH-push: nhà cung cấp VPS chặn kết nối quốc
 
 | Hiện tượng | Xử lý |
 | --- | --- |
-| `503 ..._UNAVAILABLE` ở lần tạo đơn đầu | Service vừa khởi động, bấm đặt hàng lại (web giữ cùng `Idempotency-Key`, không tạo đơn trùng). Đã có bước làm nóng ở mục 0.3. |
+| `503 ..._UNAVAILABLE` khi tạo đơn | Lỗi cold-start Feign đã sửa (warm-up + thử lại 1 lần), nên nếu vẫn gặp thì service phía sau đang down thật: xem `docker ps` và log identity/product. Bấm đặt hàng lại an toàn (web giữ cùng `Idempotency-Key`, không tạo đơn trùng). |
 | Web báo "Phiên đăng nhập đã hết hạn" | Refresh token hết hạn hoặc bị thu hồi: đăng nhập lại trên modal vừa hiện ra. |
 | Đơn vẫn `Chờ thanh toán` sau khi bấm thành công | Đợi 3–5 giây, trang tự hỏi lại mỗi 2 giây (relay chạy theo chu kỳ). |
 | Không có thư trong Mailpit | Kiểm tra tunnel còn mở; `docker logs ecommerce-notification-service --tail 20` tìm dòng `[EMAIL ĐÃ GỬI]`. |

@@ -67,6 +67,12 @@ public class OrderServiceImpl implements OrderService {
     @Value("${order.inventory-lock.wait-time-seconds:3}")
     private long waitTimeSeconds = 3;
 
+    /** Gọi identity tối đa 2 lần khi lỗi tạm thời (xem callIdentity). */
+    static final int IDENTITY_MAX_ATTEMPTS = 2;
+
+    @Value("${order.identity.retry-delay-ms:100}")
+    private long identityRetryDelayMs = 100;
+
     @Override
     public CreateOrderResult createOrder(UUID userId, String customerEmail, CreateOrderRequest request,
                                          String idempotencyKey) {
@@ -306,17 +312,7 @@ public class OrderServiceImpl implements OrderService {
     }
 
     private AddressInfo fetchAddress(UUID addressId, UUID userId) {
-        ClientApiResponse<AddressInfo> response;
-        try {
-            response = identityClient.getAddress(addressId);
-        } catch (FeignException.NotFound e) {
-            throw new BusinessException("ADDRESS_NOT_FOUND",
-                    "Address not found: " + addressId, HttpStatus.BAD_REQUEST);
-        } catch (FeignException e) {
-            log.error("identity-service unavailable: {}", e.getMessage());
-            throw new BusinessException("IDENTITY_SERVICE_UNAVAILABLE",
-                    "Could not verify address, please try again", HttpStatus.SERVICE_UNAVAILABLE);
-        }
+        ClientApiResponse<AddressInfo> response = callIdentity(addressId);
 
         AddressInfo address = response.data();
         if (address == null) {
@@ -329,6 +325,52 @@ public class OrderServiceImpl implements OrderService {
                     "Address does not belong to current user", HttpStatus.FORBIDDEN);
         }
         return address;
+    }
+
+    /**
+     * Gọi identity lấy địa chỉ, thử lại đúng 1 lần nếu lỗi là tạm thời:
+     *  - lỗi decode (status 2xx) — vd "'messageConverters' must not be empty" khi Feign khởi tạo lười
+     *    các converter và nhiều request đầu tiên tới cùng lúc (xem FeignWarmup);
+     *  - lỗi mạng (status -1) hoặc 5xx.
+     * 404 -> ADDRESS_NOT_FOUND; 4xx khác không thử lại. GET là idempotent nên thử lại an toàn.
+     */
+    private ClientApiResponse<AddressInfo> callIdentity(UUID addressId) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return identityClient.getAddress(addressId);
+            } catch (FeignException.NotFound e) {
+                throw new BusinessException("ADDRESS_NOT_FOUND",
+                        "Address not found: " + addressId, HttpStatus.BAD_REQUEST);
+            } catch (FeignException e) {
+                if (attempt < IDENTITY_MAX_ATTEMPTS && isTransient(e)) {
+                    log.warn("identity-service call failed (attempt {}/{}), retrying: {}",
+                            attempt, IDENTITY_MAX_ATTEMPTS, e.getMessage());
+                    pauseBeforeRetry();
+                    continue;
+                }
+                log.error("identity-service unavailable: {}", e.getMessage());
+                throw new BusinessException("IDENTITY_SERVICE_UNAVAILABLE",
+                        "Could not verify address, please try again", HttpStatus.SERVICE_UNAVAILABLE);
+            }
+        }
+    }
+
+    /** 4xx là lỗi của request (không tự khỏi khi gửi lại); còn lại: lỗi mạng, decode, 5xx. */
+    public static boolean isTransient(FeignException e) {
+        return e.status() < 400 || e.status() >= 500;
+    }
+
+    private void pauseBeforeRetry() {
+        if (identityRetryDelayMs <= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(identityRetryDelayMs);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new BusinessException("IDENTITY_SERVICE_UNAVAILABLE",
+                    "Could not verify address, please try again", HttpStatus.SERVICE_UNAVAILABLE);
+        }
     }
 
     private Map<String, SkuInfo> fetchSkuInfos(Set<String> skuCodes) {
