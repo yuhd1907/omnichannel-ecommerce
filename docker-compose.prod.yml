@@ -76,6 +76,13 @@ services:
     ports: !override
       - "127.0.0.1:8080:8080"
 
+  # Frontend: Nginx proxy "/" toi day, "/api/" toi gateway (infra/nginx/omnichannel.conf)
+  frontend:
+    image: ghcr.io/yuhd1907/omnichannel-frontend:${IMAGE_TAG:-latest}
+    build: !reset null
+    ports: !override
+      - "127.0.0.1:${FRONTEND_PORT:-3001}:3001"
+
   # Cong cu demo: chi bind 127.0.0.1, xem tu may minh qua SSH tunnel:
   #   ssh -L 3000:127.0.0.1:3000 -L 8025:127.0.0.1:8025 -L 9090:127.0.0.1:9090 huy@<vps>
   # SMTP 1025 khong can mo: notification goi mailpit:1025 trong mang Docker.
@@ -93,3 +100,8 @@ services:
     restart: unless-stopped
     ports: !override
       - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+
+  # Jaeger UI xem qua SSH tunnel (-L 16686:127.0.0.1:16686); OTLP khong can mo ra ngoai
+  jaeger:
+    ports: !override
+      - "127.0.0.1:${JAEGER_UI_PORT:-16686}:16686"

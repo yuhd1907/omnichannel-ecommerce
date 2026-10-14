@@ -1,0 +1,63 @@
+package ra.edu.paymentservice.security;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import ra.edu.common.security.JwtAccessDeniedHandler;
+import ra.edu.common.security.JwtAuthenticationEntryPoint;
+import ra.edu.common.security.JwtAuthenticationFilter;
+import ra.edu.common.security.JwtVerifier;
+
+@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+public class PaymentSecurityConfig {
+
+    @Bean
+    public JwtVerifier jwtVerifier(@Value("${jwt.secret}") String secret) {
+        return new JwtVerifier(secret);
+    }
+
+    @Bean
+    public JwtAuthenticationFilter jwtAuthenticationFilter(JwtVerifier jwtVerifier) {
+        return new JwtAuthenticationFilter(jwtVerifier);
+    }
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(
+            HttpSecurity http,
+            JwtAuthenticationFilter jwtAuthenticationFilter
+    ) throws Exception {
+        return http
+                .csrf(AbstractHttpConfigurer::disable)
+                .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .exceptionHandling(ex -> ex
+                        .authenticationEntryPoint(new JwtAuthenticationEntryPoint())
+                        .accessDeniedHandler(new JwtAccessDeniedHandler()))
+                .authorizeHttpRequests(auth -> auth
+                        // Loi chua bat o MVC duoc forward toi /error (ERROR dispatch, khong con JWT
+                        // context); chan /error thi moi loi bi bien thanh 401. Khong bat
+                        // server.error.include-stacktrace o production.
+                        .requestMatchers("/error").permitAll()
+                        .requestMatchers("/actuator/health").permitAll()
+                        // Prometheus scrape trong mạng Docker (prod không publish port service; gateway bị Nginx chặn)
+                        .requestMatchers("/actuator/prometheus").permitAll()
+                        // OpenAPI spec (scripts/export-openapi.sh đọc ở local để xuất ra docs/api)
+                        .requestMatchers("/v3/api-docs", "/v3/api-docs/**").permitAll()
+                        .requestMatchers("/api/v1/webhooks/**").permitAll()
+                        // VNPAY IPN / return URL: xác thực bằng chữ ký vnp_SecureHash, không có JWT
+                        .requestMatchers("/api/v1/payments/vnpay/**").permitAll()
+                        .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                        .anyRequest().authenticated()
+                )
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                .build();
+    }
+}

@@ -1,0 +1,40 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+
+  # Log tap trung (Promtail -> Loki). Dong log co traceId -> nut mo trace trong Jaeger.
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      derivedFields:
+        - name: traceId
+          matcherRegex: '\[([0-9a-f]{32})-[0-9a-f]{16}\]'
+          datasourceUid: jaeger
+          url: '$${__value.raw}'
+
+  # Trace phan tan (OpenTelemetry -> Jaeger). Tu 1 span mo log cung traceId trong Loki.
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    editable: false
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: loki
+        filterByTraceID: true
+        spanStartTimeShift: '-5m'
+        spanEndTimeShift: '5m'
+        customQuery: true
+        query: '{service=~".+"} |= "$${__span.traceId}"'

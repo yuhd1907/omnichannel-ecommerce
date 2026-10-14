@@ -74,7 +74,7 @@ Các bảng quan hệ dùng PostgreSQL, Flyway migrations và `NOT NULL` cho c�
 | `outbox_events` | các cột theo quy ước trên + `locked_until` | index `(status, created_at)`; phát `PRODUCT_SKU_CREATED` (V4) |
 | `product_skus` | `id`, `product_id`, `sku_code`, `attributes jsonb`, `price`, `image_url`, `updated_at` | unique `sku_code`; FK `product_id`; giá không âm |
 
-`product_skus.sku_code` được công bố qua event `product.sku.created` (outbox của product). Consumer trong Order **chỉ INSERT nếu chưa có** `inventory(sku_code, available_qty=0, reserved_qty=0, version=0)` (`ON CONFLICT DO NOTHING`); event lặp không reset tồn kho. SKU mẫu có sẵn được backfill bằng migration `order-service/V4__seed_inventory_sample_skus.sql`.
+`product_skus.sku_code` được công bố qua event `product.sku.created` (outbox của product). Consumer trong Order **chỉ INSERT nếu chưa có** `inventory(sku_code, available_qty=0, reserved_qty=0, version=0)` (`ON CONFLICT DO NOTHING`); event lặp không reset tồn kho. SKU mẫu có sẵn được backfill bằng migration `backend/order-service/V4__seed_inventory_sample_skus.sql`.
 
 **Tìm kiếm toàn văn:** `search_vector = setweight(tên, 'A') || setweight(mô tả, 'C')`, cấu hình `simple` (không stemming, Postgres không có từ điển tiếng Việt) trên chuỗi đã bỏ dấu bằng `unaccent` (bọc trong hàm `immutable_unaccent` để dùng được trong cột generated). Từ khóa được tách thành từ, mỗi từ thêm `:*` (khớp tiền tố) nối bằng `&`, sắp theo `ts_rank`. Elasticsearch để giai đoạn sau.
 

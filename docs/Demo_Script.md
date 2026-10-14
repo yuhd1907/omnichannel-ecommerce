@@ -9,14 +9,15 @@ Ký hiệu: **[VPS]** là lệnh bash chạy trên VPS (prompt `huy@azvps-...`),
 | # | Phần | Thời gian | Mở gì |
 | --- | --- | --- | --- |
 | 1 | Tổng quan: đã làm / chưa làm, kiến trúc | 3–4 phút | [Project_Overview.md](Project_Overview.md), `architecture.png` |
-| 2 | Swagger — tài liệu API | 1 phút | `/swagger-ui.html` |
-| 2b | Phần mở rộng: tìm kiếm, `Idempotency-Key`, VNPAY sandbox | 3 phút | Trình duyệt, Swagger / Postman |
-| 3 | S1 — đặt hàng, thanh toán thành công | 3 phút | Postman folder 3, Mailpit, `saga-check.sql` |
-| 4 | S2 — thanh toán thất bại, trả kho | 2 phút | Postman folder 4, Mailpit |
-| 5 | S3 — admin giao hàng | 2 phút | Postman folder 5, Mailpit |
+| 2 | Giao diện web + tài liệu API | 1 phút | Web, `docs/api/*.openapi.json` |
+| 2b | Phần mở rộng: tìm kiếm, `Idempotency-Key`, VNPAY sandbox | 3 phút | Web, terminal (`smoke-test.mjs`) |
+| 3 | S1 — đặt hàng, thanh toán thành công | 3 phút | Web (trang đơn hàng có theo dõi Saga), Mailpit, `saga-check.sql` |
+| 4 | S2 — thanh toán thất bại, trả kho | 2 phút | Web (đơn + trang Quản trị → Tồn kho), Mailpit |
+| 5 | S3 — admin giao hàng | 2 phút | Web (trang Quản trị), Mailpit |
 | 6 | Bảo mật | 2 phút | Terminal VPS |
-| 7 | Chịu lỗi: RabbitMQ chết vẫn nhận đơn | 2 phút | Terminal VPS, Postman |
-| 8 | Giám sát + load test | 2 phút | Grafana, kết quả k6 |
+| 7 | Chịu lỗi: RabbitMQ chết vẫn nhận đơn | 2 phút | Terminal VPS, Web |
+| 7b | Chịu lỗi: tắt Notification vẫn đặt hàng | 1 phút | Terminal VPS, Web, RabbitMQ UI, Mailpit |
+| 8 | Giám sát (metrics, log, trace) + load test | 3 phút | Grafana (Prometheus, Loki), Jaeger, kết quả k6 |
 | 9 | CI/CD | 1 phút | GitHub Actions, log cron |
 | | Hỏi đáp | | Bảng câu hỏi cuối file |
 
@@ -40,7 +41,7 @@ crontab -l | sed 's|^#\(.*auto-deploy.sh.*\)|\1|' | crontab -
 ### 0.2 Kiểm tra hệ thống
 
 ```bash
-# [VPS] 12 container đều Up, 6 service Spring báo (healthy)
+# [VPS] 16 container đều Up; 6 service Spring + frontend báo (healthy)
 cd /home/huy/omnichannel-ecommerce
 docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
 
@@ -48,11 +49,26 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
 curl -s https://huyecommerce.duckdns.org/actuator/health; echo
 ```
 
-### 0.3 Làm nóng
+### 0.3 Làm nóng và chuẩn bị tài khoản
 
-Lần gọi Feign/gRPC đầu tiên sau khi khởi động chậm, có thể trả 503. Chạy trước **folder 1 → 2 → 3** của Postman collection `Omnichannel Smoke Test` (environment "VPS Smoke") một lần. Folder 2 vẫn cần lệnh SQL cấp ADMIN in ra ở Console sau SM02. Sau bước này đã có sẵn `adminToken`, `userToken`, `addressId` cho phần demo.
+Lần gọi Feign/gRPC đầu tiên sau khi khởi động chậm, có thể trả 503. Chạy smoke test một lần trên máy mình (đi hết đăng ký → đặt hàng → thanh toán → `CONFIRMED`, in `OK` từng bước):
 
-**Access token chỉ sống 15 phút.** Ngay trước khi bắt đầu phần 3, gửi lại **SM04 Login admin** và **SM07 Login user** (folder 2) để lấy token mới. Gặp `401 Invalid or expired token` giữa buổi thì làm lại bước này.
+```powershell
+# [PS] thư mục gốc repo
+$env:BASE="https://huyecommerce.duckdns.org"; node scripts/smoke-test.mjs
+```
+
+**Ảnh sản phẩm:** đăng nhập admin → **Quản trị → Sản phẩm** → **Sửa** → mỗi phiên bản bấm **Tải ảnh** (JPEG/PNG/WebP ≤ 2 MB). Ảnh hiện ngay ở trang chủ, trang sản phẩm, giỏ hàng. Ảnh được lưu trên volume nên deploy lại không mất.
+
+Chuẩn bị 2 tài khoản trên web: một tài khoản **khách** và một tài khoản **admin** (đăng ký như khách rồi cấp quyền):
+
+```bash
+# [VPS] cấp ADMIN cho email đã đăng ký trên web; đăng nhập lại để token mới có role ADMIN
+docker exec -i ecommerce-postgres psql -U postgres -d identity_db -c \
+  "INSERT INTO user_roles (user_id, role_id) SELECT u.id, r.id FROM users u, roles r WHERE u.email='admin-demo@test.com' AND r.name='ADMIN' ON CONFLICT DO NOTHING;"
+```
+
+Web tự làm mới access token (15 phút) bằng refresh token, không cần đăng nhập lại giữa buổi. Mở 2 cửa sổ: cửa sổ thường đăng nhập khách, cửa sổ ẩn danh đăng nhập admin; trang **Quản trị → Tồn kho** nhập sẵn hàng cho sản phẩm định demo.
 
 ### 0.4 Mở sẵn các tab
 
@@ -60,14 +76,15 @@ SSH tunnel để xem Mailpit, Grafana, RabbitMQ (chỉ bind `127.0.0.1` trên VP
 
 ```powershell
 # [PS] giữ cửa sổ này mở suốt buổi demo
-ssh -L 8025:127.0.0.1:8025 -L 3000:127.0.0.1:3000 -L 15672:127.0.0.1:15672 huy@huyecommerce.duckdns.org
+ssh -L 8025:127.0.0.1:8025 -L 3000:127.0.0.1:3000 -L 16686:127.0.0.1:16686 -L 15672:127.0.0.1:15672 huy@huyecommerce.duckdns.org
 ```
 
 | Tab | Địa chỉ |
 | --- | --- |
-| Swagger UI | https://huyecommerce.duckdns.org/swagger-ui.html |
+| Web (frontend) | https://huyecommerce.duckdns.org |
 | Mailpit (hộp thư) | http://localhost:8025 |
 | Grafana (admin / mật khẩu trong `.env`) | http://localhost:3000 |
+| Jaeger (trace) | http://localhost:16686 |
 | RabbitMQ Management | http://localhost:15672 |
 | GitHub Actions | tab Actions của repo |
 | Sơ đồ kiến trúc | `docs/architecture.png`, `docs/rabbitmq-topology.png` |
@@ -89,55 +106,54 @@ Mở [Project_Overview.md](Project_Overview.md) (xem trên GitHub cho đẹp). T
 3. **Con số chính** (mục 2): đọc nhanh bảng.
 4. **Đã làm được** (mục 3): chỉ đọc tiêu đề 5 nhóm, nói "phần demo sẽ chứng minh từng nhóm".
 5. **Chưa làm được** (mục 4): nói thẳng và nêu lý do. Ba điểm hội đồng hay hỏi:
-   - không có giao diện, demo bằng API;
+   - chưa có app mobile (đã có web, API nhận `channel=MOBILE`);
    - thanh toán thật mới ở mức VNPAY sandbox;
    - không dùng MongoDB/Elasticsearch (tìm kiếm bằng `tsvector`).
 6. Chuyển sang demo: "Giờ em chứng minh các phần trên chạy thật trên VPS."
 
-## 2. Swagger (1 phút)
+## 2. Giao diện web và tài liệu API (1 phút)
 
-Mở `/swagger-ui.html`, đổi qua lại 4 service ở ô **Select a definition** góc phải. Bấm **Authorize**, dán `userToken`, thử `GET /api/v1/orders`. Điểm cần nói: spec do từng service tự sinh, gateway chỉ gom lại; "Try it out" vẫn đi qua gateway nên vẫn qua JWT và rate limit.
+Mở https://huyecommerce.duckdns.org: web **gom.** (Next.js) chạy cùng tên miền, Nginx chuyển `/` vào frontend và `/api/v1/` vào gateway. Mọi request của web đi qua gateway nên vẫn qua JWT và rate limit.
+
+Tài liệu API: mở `docs/api/order-service.openapi.json` trên GitHub. Nói: spec OpenAPI 3.1 do từng service tự sinh từ code (springdoc), xuất ra repo bằng `scripts/export-openapi.sh`; prod không mở Swagger UI để không lộ bề mặt API thừa.
 
 ## 2b. Phần mở rộng: tìm kiếm, Idempotency-Key, VNPAY (3 phút)
 
-Dùng Swagger (đã Authorize) hoặc Postman (biến `userToken`, `addressId` có sẵn sau folder 1–2).
+1. **Tìm kiếm toàn văn:** ô tìm kiếm trên web, gõ `dien thoai` (không dấu) rồi `iph` (gõ dở) → vẫn ra kết quả. Nói: cột `search_vector` generated + GIN index, `unaccent`, mỗi từ khớp tiền tố.
+2. **Idempotency-Key:** web sinh một key cho mỗi lần bấm **Đặt hàng** và giữ nguyên key khi bấm lại sau lỗi mạng. Chứng minh ở terminal: dòng `POST /orders cung Idempotency-Key -> 200, Idempotent-Replayed=true` của `smoke-test.mjs` (cùng `id` đơn, kho không bị trừ lần hai). Đổi nội dung mà giữ key thì server trả `422 IDEMPOTENCY_KEY_REUSED`.
+3. **VNPAY sandbox** (nếu đã cấu hình): ở trang đơn hàng chọn **VNPAY Sandbox** → **Thanh toán** → trang VNPAY → thẻ test NCB `9704198526191432198`, tên `NGUYEN VAN A`, ngày phát hành `07/15`, OTP `123456` (đối chiếu với thẻ test trong email đăng ký sandbox). VNPAY trả về trang `/payment/vnpay-return` của web, hiện "Thanh toán VNPAY thành công" → **Xem đơn hàng** → `Đã xác nhận / Đã thanh toán`. Log: `docker logs ecommerce-payment-service 2>&1 | grep VNPAY`.
 
-1. **Tìm kiếm toàn văn** (public, mở thẳng trên trình duyệt):
-   `https://huyecommerce.duckdns.org/api/v1/products?q=dien thoai` (không dấu) rồi `?q=iph` (gõ dở) → vẫn ra kết quả. Nói: cột `search_vector` generated + GIN index, `unaccent`, mỗi từ khớp tiền tố.
-2. **Idempotency-Key:** gửi `POST /api/v1/orders` kèm header `Idempotency-Key: demo-key-1` → `201`. Gửi lại **y hệt** → `200`, header `Idempotent-Replayed: true`, cùng `id` đơn, kho không bị trừ lần hai. Đổi `quantity` mà giữ key → `422 IDEMPOTENCY_KEY_REUSED`. (Mỗi buổi demo đổi key mới.)
-3. **VNPAY sandbox** (nếu đã cấu hình): `POST /api/v1/orders/{orderId}/payments` với `{"method":"VNPAY"}` → copy `checkoutUrl` mở trên trình duyệt → thẻ test NCB `9704198526191432198`, tên `NGUYEN VAN A`, ngày phát hành `07/15`, OTP `123456` (đối chiếu với thẻ test trong email đăng ký sandbox). Sau khi trả tiền trình duyệt về return URL, hiện JSON `{orderId, result: "SUCCESS"}`; `GET /api/v1/orders/{orderId}` → `CONFIRMED / PAID`. Log: `docker logs ecommerce-payment-service 2>&1 | grep VNPAY`.
+## 3. S1 — Đặt hàng: thanh toán khi nhận hàng (COD) và VNPAY (3 phút)
 
-## 3. S1 — Đặt hàng và thanh toán thành công (3 phút)
+Trên web, tài khoản khách:
 
-Postman, folder **3. S1** (hoặc folder 5 nếu đã chạy S1 lúc làm nóng):
-
-1. **Tạo đơn** → `201`, `PENDING`. Nói: trong 1 transaction, `orders` + `order_items` được ghi, kho trừ bằng `UPDATE ... WHERE available_qty >= :q`, event `ORDER_CREATED` ghi vào outbox.
-2. Mở **Mailpit**: có thư "Đã nhận đơn hàng #...". Thư đi theo đường order outbox → RabbitMQ → notification → SMTP.
-3. **Xem payment** → `PENDING`: payment-service tự tạo payment khi nhận `order.created`.
-4. **Checkout MOCK** rồi **Webhook SUCCESS**. Webhook ký HMAC-SHA256 (`X-Signature`); sai chữ ký sẽ bị từ chối.
-5. **Kiểm tra đơn** → `CONFIRMED / PAID`. Mailpit có thêm "Thanh toán thành công".
-6. Xem dấu vết trên cả 3 database (copy `orderId` từ Console của Postman):
+1. Chọn sản phẩm → phiên bản → **Mua ngay** → chọn địa chỉ, **Thanh toán khi nhận hàng (COD)** → **Đặt hàng**. Nói: trong 1 transaction, `orders` + `order_items` được ghi, kho giữ bằng `UPDATE ... WHERE available_qty >= :q`, event `ORDER_CREATED` ghi vào outbox.
+2. Trang đơn tự gửi lựa chọn COD; khoảng 1–2 giây sau đơn thành `Đã xác nhận` + badge `Thu tiền khi giao (COD)`. Khung **Theo dõi Saga**: payment-service ghi COD và phát `payment.cod_accepted` qua outbox → order-service xác nhận đơn, hàng giữ chuyển thành đã bán, **chưa thu tiền**. Mailpit: "Đã nhận đơn hàng" và "Đặt hàng thành công (thanh toán khi nhận hàng)".
+3. Đặt thêm 1 đơn chọn **VNPAY** → chuyển sang trang VNPAY sandbox (có cả lựa chọn quét **VNPAY-QR** bằng app ngân hàng) → thẻ test NCB `9704198526191432198`, tên `NGUYEN VAN A`, ngày phát hành `07/15`, OTP `123456` → về trang `/payment/vnpay-return` → **Xem đơn hàng**: `Đã xác nhận / Đã thanh toán`. Chữ ký VNPAY (HMAC-SHA512) được kiểm ở payment-service; IPN và return URL đi chung một hàm áp kết quả có chống lặp.
+4. Xem dấu vết trên cả 3 database (mã đơn đầy đủ lấy từ URL trang đơn hàng):
 
    ```bash
    # [VPS] trong /home/huy/omnichannel-ecommerce
-   docker exec -i ecommerce-postgres psql -U postgres -d order_db -v order_id=<orderId> < scripts/saga-check.sql
+   docker exec -i ecommerce-postgres psql -U postgres -d order_db -v order_id=<orderId> < scripts/sql/saga-check.sql
    ```
 
-   Chỉ ra: outbox của order có `ORDER_CREATED`, `ORDER_CONFIRMED` đều `SENT`; payment `SUCCESS`; 2 dòng notification.
+   Chỉ ra: outbox của order có `ORDER_CREATED`, `ORDER_CONFIRMED` đều `SENT`; payment VNPAY `SUCCESS` (COD: `PENDING` tới khi giao xong); notification tương ứng.
 
 ## 4. S2 — Thanh toán thất bại, trả kho (2 phút)
 
-Folder **4. S2**. `S2-0` ghi lại tồn kho, webhook `FAILED`, đơn thành `CANCELLED / FAILED`, `S2-6` cho thấy kho về đúng số cũ. Mailpit có thư "đã bị hủy".
+1. Cửa sổ admin: **Quản trị → Tồn kho**, chọn sản phẩm, ghi lại số **Còn bán**.
+2. Cửa sổ khách: đặt 1 đơn sản phẩm đó, chọn **VNPAY** → cửa sổ admin bấm lại sản phẩm: **Còn bán** giảm 1, **Đang giữ** tăng 1.
+3. Trên trang VNPAY bấm **Hủy thanh toán** → về web báo "không thành công" → đơn thành `Đã hủy / Thanh toán lỗi`, Saga hiện *Hủy đơn & trả hàng về kho*. Admin xem lại: kho về đúng số cũ. Mailpit có thư "đã bị hủy". (Cách khác: khách bấm **Hủy đơn** khi còn `Chờ thanh toán`.)
 
 Nói thêm (không cần demo): đơn không thanh toán trong 15 phút bị job hủy và trả kho theo đúng đường này. Tiền về **sau khi** đơn đã hủy thì đơn không được "sống lại", payment bị đánh dấu `needs_refund` để đối soát.
 
 ## 5. S3 — Admin giao hàng (2 phút)
 
-Folder **5. S3**:
+Cửa sổ admin, **Quản trị → Đơn hàng**, lọc **Đã xác nhận**:
 
-- `S3-6`: user thường gọi API admin → `403`.
-- `S3-8`: nhảy cóc `CONFIRMED → COMPLETED` → `409 INVALID_STATUS_TRANSITION`.
-- `S3-9`, `S3-10`: `SHIPPING`, rồi `COMPLETED`. Mỗi bước là một `UPDATE ... WHERE status = :from`, nên hai admin bấm cùng lúc thì chỉ một người thắng.
+- Bấm **Giao hàng** ở đơn COD của S1 → xác nhận → `Đang giao`; lọc **Đang giao** → **Hoàn tất** → `Hoàn thành`. Đơn COD chuyển `Đã thanh toán` (shipper đã thu tiền mặt), payment COD sang `SUCCESS` qua event `order.completed`. Trang đơn của khách hiện đủ 6 bước Saga.
+- Chỉ có hai bước `CONFIRMED → SHIPPING → COMPLETED`, mỗi bước là một `UPDATE ... WHERE status = :from`: hai admin bấm cùng lúc thì một người nhận `409`.
+- Tài khoản khách mở `/admin` → "Bạn không có quyền truy cập"; API admin trả `403` (dòng cuối của `smoke-test.mjs`).
 - Mailpit: "đang được giao", "đã giao thành công".
 
 ## 6. Bảo mật (2 phút)
@@ -164,7 +180,7 @@ Nói: rate limit theo `userId` (có JWT) hoặc theo IP lấy từ phần tử *
 docker stop ecommerce-rabbitmq
 ```
 
-Tạo 1 đơn trong Postman → vẫn `201`. Chạy `saga-check.sql` cho đơn đó: outbox `ORDER_CREATED` đang `PENDING`, chưa có payment.
+Đặt 1 đơn trên web → vẫn tạo được, trang đơn hàng hiện `Chờ thanh toán`, Saga đứng ở bước *Khởi tạo thanh toán*. Chạy `saga-check.sql` cho đơn đó: outbox `ORDER_CREATED` đang `PENDING`, chưa có payment.
 
 ```bash
 # [VPS]
@@ -173,9 +189,27 @@ docker start ecommerce-rabbitmq
 
 Đợi khoảng 30 giây, chạy lại `saga-check.sql`: outbox đã `SENT`, payment đã tạo, Mailpit có thư. Đây là lý do dùng outbox thay vì publish thẳng trong request.
 
+### 7b. Tắt Notification Service, người dùng vẫn đặt hàng được (tiêu chí đề tài)
+
+```bash
+# [VPS]
+docker stop ecommerce-notification-service
+```
+
+Trên web đặt 1 đơn → vẫn tạo được, trang đơn hàng hiện bình thường; thanh toán vẫn chạy (payment và order không phụ thuộc notification). Mở RabbitMQ Management → queue `notification.order-events` có message đang chờ, Mailpit chưa có thư.
+
+```bash
+# [VPS]
+docker start ecommerce-notification-service
+```
+
+Khoảng 30–60 giây sau khi service healthy: queue về 0, Mailpit nhận thư của đơn vừa đặt. Nói: queue durable giữ event trong lúc consumer chết; consumer chống trùng theo `messageId` nên nhận lại không gửi 2 thư. Đã chạy thử 14/10: lúc tắt queue = 1, mail không đổi; bật lại queue = 0, mail +1.
+
 ## 8. Giám sát và load test (2 phút)
 
 - **Grafana** (dashboard "Omnichannel - Tổng quan"): request/giây, p95 theo service, mã HTTP ở gateway, heap JVM, connection DB, message đang chờ trong từng queue.
+- **Log tập trung (Loki):** Grafana → *Explore* → Loki → `{service="order-service"}` hoặc `{level="ERROR"}`. Log của 16 container về một chỗ, không cần `docker logs` từng cái.
+- **Trace (Jaeger):** đặt 1 đơn trên web, mở DevTools → response có `traceId` → dán vào Jaeger. Trace `POST /api/v1/orders` có khoảng 8 span: gateway (kèm Redis rate limit) → order-service → identity (Feign, lấy địa chỉ) và product (gRPC `BatchGetSkus`). Từ span bấm *Logs for this span* để xem log cùng traceId trong Loki.
 - **Load test** (đã chạy 13/10 trên máy local, chi tiết ở `Flashsale_Results.md`). Mở ảnh Grafana và tổng kết k6 đã chụp, nói 3 ý:
   1. Đúng 1000 đơn cho kho 1000 dưới tải 1000 req/s; `load-verify.sql` cả 4 cột `t`.
   2. Hết hàng: giữ 1000 req/s, trung vị 10 ms, nhờ bước từ chối sớm.
@@ -184,7 +218,7 @@ docker start ecommerce-rabbitmq
 
 ## 9. CI/CD (1 phút)
 
-Tab **Actions**: workflow "Docker Build & Push" chạy test → build 6 image → push GHCR với tag `sha-xxxxxxx` và `latest`. Trên VPS:
+Tab **Actions**: workflow "Docker Build & Push" chạy test → build 7 image (6 service + frontend) → push GHCR với tag `sha-xxxxxxx` và `latest`. Trên VPS:
 
 ```bash
 # [VPS] log của cron (đường dẫn sau dấu >> trong crontab -l)
@@ -215,9 +249,9 @@ Nói lý do không dùng SSH-push: nhà cung cấp VPS chặn kết nối quốc
 
 | Hiện tượng | Xử lý |
 | --- | --- |
-| `503 ..._UNAVAILABLE` ở lần tạo đơn đầu | Service vừa khởi động, gửi lại request. Đã có bước làm nóng ở mục 0.3. |
-| `401 Invalid or expired token` | Token quá 15 phút: gửi lại SM04 và SM07 (folder 2) rồi chạy tiếp. |
-| Đơn vẫn `PENDING` sau webhook | Đợi 3–5 giây rồi gửi lại "Kiểm tra đơn" (relay chạy theo chu kỳ). |
+| `503 ..._UNAVAILABLE` ở lần tạo đơn đầu | Service vừa khởi động, bấm đặt hàng lại (web giữ cùng `Idempotency-Key`, không tạo đơn trùng). Đã có bước làm nóng ở mục 0.3. |
+| Web báo "Phiên đăng nhập đã hết hạn" | Refresh token hết hạn hoặc bị thu hồi: đăng nhập lại trên modal vừa hiện ra. |
+| Đơn vẫn `Chờ thanh toán` sau khi bấm thành công | Đợi 3–5 giây, trang tự hỏi lại mỗi 2 giây (relay chạy theo chu kỳ). |
 | Không có thư trong Mailpit | Kiểm tra tunnel còn mở; `docker logs ecommerce-notification-service --tail 20` tìm dòng `[EMAIL ĐÃ GỬI]`. |
 | Trang không mở được từ mạng ngoài Việt Nam | Nhà cung cấp VPS chặn kết nối quốc tế; dùng mạng trong nước (4G điện thoại). |
 | Trình duyệt báo chứng chỉ lạ | Phần mềm diệt virus (Kaspersky) chặn HTTPS; xem bằng điện thoại 4G hoặc `openssl s_client` trên VPS. |

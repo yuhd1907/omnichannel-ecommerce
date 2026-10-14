@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+@theme {
+  /* biến font do next/font gắn vào <html> (layout.tsx) */
+  --font-sans: var(--font-be-vietnam), "Segoe UI", Roboto, Arial, sans-serif;
+  --font-mono: var(--font-jetbrains), Consolas, monospace;
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  background: #ffffff;
+  color: #171717;
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: #171717;
+  color: #ffffff;
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-neutral-200 bg-white;
+  }
+  .input {
+    @apply w-full rounded-xl border border-neutral-300 bg-white px-3.5 py-2.5 text-sm text-neutral-900 placeholder:text-neutral-400 outline-none transition focus:border-neutral-900 focus:ring-4 focus:ring-neutral-900/5;
+  }
+  .label {
+    @apply mb-1.5 block text-xs font-semibold tracking-wide text-neutral-500 uppercase;
+  }
+  .field-error {
+    @apply mt-1 text-xs text-rose-600;
+  }
+}
+
+/* sweetalert2 nằm ngoài cây React -> chỉnh trực tiếp */
+.swal2-popup {
+  border-radius: 1.25rem !important;
+  border: 1px solid #e5e5e5;
+  font-family: var(--font-sans) !important;
+}
+.swal2-actions button {
+  border-radius: 0.75rem !important;
+  font-weight: 600 !important;
+  box-shadow: none !important;
+}
+.swal2-actions .swal2-cancel {
+  border: 1px solid #d4d4d4 !important;
+  color: #171717 !important;
+}
+.swal2-actions .swal2-cancel:active {
+  box-shadow: 0 6px 14px -4px rgb(0 0 0 / 0.18) !important;
+}

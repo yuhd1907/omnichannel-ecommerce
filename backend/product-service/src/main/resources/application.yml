@@ -1,0 +1,103 @@
+spring:
+  application:
+    name: product-service
+  autoconfigure:
+    # Service chi verify JWT, khong tu xac thuc user -> bo user in-memory mac dinh
+    # (khong in "Using generated security password" ra log moi lan khoi dong).
+    exclude: org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
+  datasource:
+    url: ${PRODUCT_DATASOURCE_URL:jdbc:postgresql://localhost:5432/product_db}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:postgrespassword}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_DEFAULT_USER:guest}
+    password: ${RABBITMQ_DEFAULT_PASS:guest}
+    # Giong order-service: OutboxRelay chi markSent khi broker ACK va message vao duoc queue.
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      observation-enabled: true
+      mandatory: true
+    listener:
+      simple:
+        observation-enabled: true
+  # Anh san pham (admin tai len): toi da 2 MB / anh
+  servlet:
+    multipart:
+      max-file-size: 2MB
+      max-request-size: 3MB
+  grpc:
+    server:
+      port: ${PRODUCT_GRPC_PORT:9082}
+
+server:
+  port: ${PRODUCT_PORT:8082}
+
+management:
+  # Distributed tracing (Micrometer Tracing + OpenTelemetry) -> Jaeger qua OTLP HTTP.
+  # Demo lay mau 100%; prod tai cao nen ha TRACING_SAMPLING_PROBABILITY (vd 0.1).
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+  opentelemetry:
+    resource-attributes:
+      deployment.environment: ${DEPLOY_ENV:local}
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTLP_TRACING_ENDPOINT:http://localhost:4318/v1/traces}
+  # Starter OpenTelemetry kem theo exporter metrics/log OTLP: tat, metrics da co Prometheus,
+  # log da co Promtail -> Loki (Jaeger chi nhan trace).
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  logging:
+    export:
+      otlp:
+        enabled: false
+  observations:
+    enable:
+      # Outbox relay / expiry job @Scheduled chay moi giay -> moi lan 1 trace rong, lam ngap Jaeger
+      tasks.scheduled: false
+      # Span cua tung security filter: nhieu va khong giup doc luong nghiep vu
+      spring.security: false
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    distribution:
+      # Histogram de Grafana tinh p95/p99 bang histogram_quantile
+      percentiles-histogram:
+        http.server.requests: true
+  health:
+    rabbit:
+      # Giong order/payment: broker chet thi van xem/tim san pham duoc, event nam trong outbox
+      # cho relay gui lai. Health phu thuoc RabbitMQ se lam Docker danh dau service UNHEALTHY.
+      enabled: false
+
+app:
+  upload:
+    # Thu muc luu anh; Docker: volume product_uploads gan vao /data/uploads
+    dir: ${PRODUCT_UPLOAD_DIR:./uploads}
+    # Co gia tri -> anh len Cloudinary (CDN). Dang: cloudinary://<api_key>:<api_secret>@<cloud_name>
+    cloudinary-url: ${CLOUDINARY_URL:}
+    cloudinary-folder: ${CLOUDINARY_FOLDER:gom/products}
+
+jwt:
+  # Phai giong voi gia tri trong identity-service — doc tu cung bien moi truong JWT_SECRET
+  secret: ${JWT_SECRET:404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}

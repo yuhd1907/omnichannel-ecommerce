@@ -13,7 +13,7 @@ digraph architecture {
          fillcolor="#F8FAFC", color="#334155", penwidth=1.3, margin="0.18,0.10"];
   edge  [fontname="DejaVu Sans", fontsize=9.5, penwidth=1.6, arrowsize=0.8];
 
-  client [label=<<b>Web / Mobile client</b><br/><font point-size="9">channel = WEB | MOBILE</font>>,
+  client [label=<<b>Trình duyệt / Mobile client</b><br/><font point-size="9">channel = WEB | MOBILE</font>>,
           fillcolor="#EEF2FF"];
   pg_gateway [label=<<b>Cổng thanh toán</b><br/><font point-size="9">MOCK — webhook ký HMAC-SHA256<br/>VNPAY sandbox — IPN ký HMAC-SHA512</font>>,
               fillcolor="#FFFFFF", style="rounded,dashed,filled", color="#64748B"];
@@ -25,21 +25,24 @@ digraph architecture {
       <tr><td><font color="#EA580C"><b>━━━▶</b></font></td><td align="left"><font point-size="9">gRPC (Protobuf, HTTP/2)</font></td></tr>
       <tr><td><font color="#16A34A"><b>━━━▶</b></font></td><td align="left"><font point-size="9">AMQP — event qua Transactional Outbox</font></td></tr>
       <tr><td><font color="#6B7280"><b>━━━</b></font></td><td align="left"><font point-size="9">JDBC / Redis</font></td></tr>
-      <tr><td><font color="#7C3AED"><b>┅┅┅▶</b></font></td><td align="left"><font point-size="9">giám sát / email (Prometheus scrape, SMTP)</font></td></tr>
+      <tr><td><font color="#7C3AED"><b>┅┅┅▶</b></font></td><td align="left"><font point-size="9">giám sát / email (metrics, log, trace, SMTP)</font></td></tr>
     </table>>];
 
   nginx [label=<<b>Nginx</b>  :443<br/><font point-size="9">HTTPS (Let's Encrypt), reverse proxy duy nhất<br/>chặn /actuator/* trừ /actuator/health</font>>,
          fillcolor="#F1F5F9", color="#0F172A"];
 
   subgraph cluster_net {
-    label=<<b>Docker network: ecommerce-network</b>   <font point-size="9">(prod: chỉ gateway, bind 127.0.0.1:8080 cho Nginx)</font>>;
+    label=<<b>Docker network: ecommerce-network</b>   <font point-size="9">(prod: chỉ gateway :8080 và frontend :3001 bind 127.0.0.1 cho Nginx)</font>>;
     style="rounded,dashed"; color="#94A3B8"; fontsize=11; margin=18;
 
     gateway [label=<<b>API Gateway</b>  :8080<br/>
 <font point-size="9">Spring Cloud Gateway (WebFlux)<br/>
 JWT verify · rate limit (Redis token bucket)<br/>
-Swagger UI gom 4 service</font>>,
+routing tới 5 service</font>>,
              fillcolor="#DBEAFE", color="#1D4ED8", penwidth=2];
+
+    frontend [label=<<b>Frontend (gom.)</b>  :3001<br/><font point-size="9">Next.js 16 · TypeScript · Tailwind<br/>cửa hàng, giỏ, thanh toán, theo dõi Saga, admin<br/>cổng MOCK ký webhook HMAC phía server</font>>,
+              fillcolor="#EEF2FF", color="#4338CA", penwidth=2];
 
     identity [label=<<b>Identity &amp; User</b>  :8081<br/><font point-size="9">register / login / refresh JWT<br/>user, role, address</font>>];
     product  [label=<<b>Product Catalog</b>  :8082<br/><font point-size="9">REST: catalog, tìm kiếm tsvector<br/>gRPC server :9082 · outbox</font>>];
@@ -58,22 +61,27 @@ Swagger UI gom 4 service</font>>,
 
     mailpit    [label=<<b>Mailpit</b><br/><font point-size="9">SMTP :1025 · hộp thư :8025</font>>, fillcolor="#F5F3FF", color="#7C3AED"];
     prometheus [label=<<b>Prometheus</b>  :9090<br/><font point-size="9">scrape /actuator/prometheus</font>>, fillcolor="#F5F3FF", color="#7C3AED"];
-    grafana    [label=<<b>Grafana</b>  :3000<br/><font point-size="9">dashboard tổng quan</font>>, fillcolor="#F5F3FF", color="#7C3AED"];
+    grafana    [label=<<b>Grafana</b>  :3000<br/><font point-size="9">metrics · log · trace<br/>log ⇄ trace theo traceId</font>>, fillcolor="#F5F3FF", color="#7C3AED"];
+    loki       [label=<<b>Loki</b> + <b>Promtail</b><br/><font point-size="9">log mọi container (docker.sock)</font>>, fillcolor="#F5F3FF", color="#7C3AED"];
+    jaeger     [label=<<b>Jaeger</b>  :16686<br/><font point-size="9">OpenTelemetry · OTLP :4318</font>>, fillcolor="#F5F3FF", color="#7C3AED"];
 
     // Order + Payment ngay duoi Gateway; Identity + Product (Order goi dong bo) hang duoi
     // -> mui ten Feign/gRPC ngan, khong cat ngang nhan route.
     { rank=same; order; payment; notification; mailpit; }
     { rank=same; identity; product; }
     { rank=same; postgres; redis; rabbitmq; }
-    { rank=same; prometheus; grafana; }
+    { rank=same; prometheus; grafana; loki; jaeger; }
   }
   { rank=same; client; pg_gateway; legend; }
 
   // ---- REST (xanh duong) ----
   edge [color="#2563EB", fontcolor="#1D4ED8"];
-  client     -> nginx   [label="  HTTPS  /api/v1/**", penwidth=2.2];
+  client     -> nginx   [label="  HTTPS", penwidth=2.2];
   pg_gateway -> nginx   [label="  webhook / IPN", style=dashed];
-  nginx      -> gateway [penwidth=2.2];
+  nginx      -> gateway  [label="  /api/v1/**", penwidth=2.2];
+  nginx      -> frontend [label="  /", penwidth=2.2];
+  frontend   -> gateway  [label="webhook MOCK
+(ký HMAC)", style=dashed, constraint=false];
   gateway -> identity [label="/auth, /users  "];
   gateway -> product  [label="/products"];
   gateway -> order    [label="/orders\n/admin/orders, /admin/inventory"];
@@ -97,6 +105,9 @@ Swagger UI gom 4 service</font>>,
   notification -> mailpit   [label="SMTP"];
   prometheus   -> gateway   [label="scrape 6 service", constraint=false];
   grafana      -> prometheus;
+  grafana      -> loki;
+  grafana      -> jaeger;
+  order        -> jaeger    [label="span OTLP (6 service)", constraint=false];
 
   // ---- Truy cap du lieu (xam) ----
   edge [color="#6B7280", fontcolor="#4B5563", style=solid, penwidth=1.1, arrowhead=none, label=""];

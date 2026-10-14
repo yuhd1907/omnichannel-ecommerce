@@ -1,0 +1,17 @@
+# Build context cua 6 service Java = thu muc backend/ (Dockerfile COPY . . de Gradle thay du multi-module)
+.gradle
+**/.gradle
+build
+**/build
+out
+**/out
+.idea
+*.iml
+
+# Bi mat - tuyet doi khong dua vao image
+.env
+.env.local
+
+*.md
+*.log
+logs

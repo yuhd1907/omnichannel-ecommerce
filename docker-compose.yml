@@ -24,6 +24,10 @@ x-java-env: &java-env
   POSTGRES_USER: ${POSTGRES_USER:-postgres}
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-123456!}
   JWT_SECRET: ${JWT_SECRET:-404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
+  # Trace -> Jaeger (OTLP HTTP). Ha ty le lay mau khi tai cao: TRACING_SAMPLING_PROBABILITY=0.1
+  OTLP_TRACING_ENDPOINT: http://jaeger:4318/v1/traces
+  TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-1.0}
+  DEPLOY_ENV: ${DEPLOY_ENV:-local}
 
 services:
   postgres:
@@ -38,7 +42,7 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./docker/postgres/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+      - ./infra/postgres/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 10s
@@ -95,7 +99,7 @@ services:
   identity-service:
     <<: *spring-service
     build:
-      context: .
+      context: ./backend
       dockerfile: identity-service/Dockerfile
     container_name: ecommerce-identity-service
     environment:
@@ -118,7 +122,7 @@ services:
   product-service:
     <<: *spring-service
     build:
-      context: .
+      context: ./backend
       dockerfile: product-service/Dockerfile
     container_name: ecommerce-product-service
     environment:
@@ -128,6 +132,13 @@ services:
       RABBITMQ_PORT: 5672
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
+      # Anh san pham admin tai len (volume giu anh qua cac lan deploy)
+      PRODUCT_UPLOAD_DIR: /data/uploads
+      # Co gia tri -> anh len Cloudinary (CDN) thay vi volume. Dat trong .env, KHONG commit
+      CLOUDINARY_URL: ${CLOUDINARY_URL:-}
+      CLOUDINARY_FOLDER: ${CLOUDINARY_FOLDER:-gom/products}
+    volumes:
+      - product_uploads:/data/uploads
     ports:
       - "${PRODUCT_PORT:-8082}:8082"
       - "${PRODUCT_GRPC_PORT:-9082}:9082"   # gRPC — mo ra ngoai de test bang grpcurl
@@ -146,7 +157,7 @@ services:
   order-service:
     <<: *spring-service
     build:
-      context: .
+      context: ./backend
       dockerfile: order-service/Dockerfile
     container_name: ecommerce-order-service
     environment:
@@ -189,7 +200,7 @@ services:
   payment-service:
     <<: *spring-service
     build:
-      context: .
+      context: ./backend
       dockerfile: payment-service/Dockerfile
     container_name: ecommerce-payment-service
     environment:
@@ -201,11 +212,12 @@ services:
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
       JWT_SECRET: ${JWT_SECRET:-404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
       PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-dev-webhook-secret-key-12345}
-      # VNPAY sandbox (de trong = chi dung MOCK). Tren VPS dat trong .env:
-      #   VNPAY_RETURN_URL=https://<domain>/api/v1/payments/vnpay/return
+      # VNPAY sandbox (de trong = chi dung MOCK). Return URL tro ve trang cua frontend
+      # (trang nay goi /api/v1/payments/vnpay/return de kiem chu ky). Tren VPS dat trong .env:
+      #   VNPAY_RETURN_URL=https://<domain>/payment/vnpay-return
       VNPAY_TMN_CODE: ${VNPAY_TMN_CODE:-}
       VNPAY_HASH_SECRET: ${VNPAY_HASH_SECRET:-}
-      VNPAY_RETURN_URL: ${VNPAY_RETURN_URL:-http://localhost:8080/api/v1/payments/vnpay/return}
+      VNPAY_RETURN_URL: ${VNPAY_RETURN_URL:-http://localhost:3001/payment/vnpay-return}
     ports:
       - "${PAYMENT_PORT:-8084}:8084"
     depends_on:
@@ -223,7 +235,7 @@ services:
   notification-service:
     <<: *spring-service
     build:
-      context: .
+      context: ./backend
       dockerfile: notification-service/Dockerfile
     container_name: ecommerce-notification-service
     environment:
@@ -235,8 +247,18 @@ services:
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
       # Gui email that toi Mailpit (xem thu tai http://localhost:8025). false = chi ghi log.
       MAIL_ENABLED: ${MAIL_ENABLED:-true}
-      MAIL_HOST: mailpit
-      MAIL_PORT: 1025
+      # SMTP: mac dinh Mailpit (hop thu gia, xem :8025). Gui thu that: dat SMTP_* trong .env
+      # (vd Gmail: smtp.gmail.com / 587 / STARTTLS + App Password) - code khong doi.
+      MAIL_HOST: ${SMTP_HOST:-mailpit}
+      MAIL_PORT: ${SMTP_PORT:-1025}
+      MAIL_USERNAME: ${SMTP_USERNAME:-}
+      MAIL_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_SMTP_AUTH: ${SMTP_AUTH:-false}
+      MAIL_STARTTLS: ${SMTP_STARTTLS:-false}
+      MAIL_FROM: ${MAIL_FROM:-no-reply@gom.local}
+      MAIL_FROM_NAME: ${MAIL_FROM_NAME:-gom.}
+      # Link "Xem don hang" trong email (VPS: https://<domain>)
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:3001}
     ports:
       - "${NOTIFICATION_PORT:-8085}:8085"
     depends_on:
@@ -254,7 +276,7 @@ services:
   api-gateway:
     <<: *spring-service
     build:
-      context: .
+      context: ./backend
       dockerfile: api-gateway/Dockerfile
     container_name: ecommerce-api-gateway
     environment:
@@ -265,7 +287,6 @@ services:
       PRODUCT_URI: http://product-service:8082
       ORDER_URI: http://order-service:8083
       PAYMENT_URI: http://payment-service:8084
-      PAYMENT_PUBLIC_BASE_URL: http://payment-service:8084
       # Rate limit (token bucket / giay / user hoac IP). Mac dinh giu nguyen nhu cu;
       # chi nang khi chay load test, vd: RATE_LIMIT_LOGIN_REPLENISH=100 trong .env
       RATE_LIMIT_REPLENISH: ${RATE_LIMIT_REPLENISH:-10}
@@ -291,6 +312,37 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+
+  # Web storefront + trang quan tri (Next.js). Trinh duyet goi /api/v1/* cung origin,
+  # Next proxy sang api-gateway (local); tren VPS Nginx chuyen /api/ thang toi gateway.
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        GATEWAY_URL: http://api-gateway:8080
+    container_name: ecommerce-frontend
+    restart: unless-stopped
+    environment:
+      GATEWAY_URL: http://api-gateway:8080
+      # Cong MOCK: server Next ky webhook bang secret nay (phai trung payment-service)
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-dev-webhook-secret-key-12345}
+    ports:
+      - "${FRONTEND_PORT:-3001}:3001"
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3001/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - ecommerce-network
 
   # ------------------------------------------------------------------------
   #  Cong cu demo: Mailpit (hop thu gia), Prometheus + Grafana (giam sat)
@@ -318,7 +370,7 @@ services:
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=3d
     volumes:
-      - ./deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
@@ -339,17 +391,70 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/omnichannel-overview.json
     volumes:
-      - ./deploy/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./deploy/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./infra/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     ports:
       - "${GRAFANA_PORT:-3000}:3000"
     depends_on:
       - prometheus
+      - loki
+      - jaeger
     deploy:
       resources:
         limits:
           memory: 256M
+    networks:
+      - ecommerce-network
+
+  # Log tap trung: Promtail doc log moi container qua docker.sock -> Loki -> Grafana (Explore > Loki)
+  loki:
+    image: grafana/loki:3.5.7
+    container_name: ecommerce-loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki.yml
+    volumes:
+      - ./infra/monitoring/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - ecommerce-network
+
+  promtail:
+    image: grafana/promtail:3.5.0
+    container_name: ecommerce-promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/promtail.yml
+    volumes:
+      - ./infra/monitoring/promtail/promtail.yml:/etc/promtail/promtail.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    networks:
+      - ecommerce-network
+
+  # Trace phan tan: 6 service gui span qua OTLP HTTP (:4318) -> Jaeger (luu RAM, UI :16686)
+  jaeger:
+    image: jaegertracing/all-in-one:1.69.0
+    container_name: ecommerce-jaeger
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      MEMORY_MAX_TRACES: "20000"
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
+      - "${JAEGER_OTLP_PORT:-4318}:4318"   # cho service chay bang gradle bootRun ngoai Docker
+    deploy:
+      resources:
+        limits:
+          memory: 384M
     networks:
       - ecommerce-network
 
@@ -363,3 +468,5 @@ volumes:
   rabbitmq_data:
   prometheus_data:
   grafana_data:
+  loki_data:
+  product_uploads:

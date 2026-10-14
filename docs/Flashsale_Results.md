@@ -2,7 +2,7 @@
 
 **Kịch bản:** 100 người mua cùng lúc, mỗi người mua 1 sản phẩm `FLASH-001`; kho có 10 sản phẩm. Kỳ vọng đúng 10 đơn thành công, 90 đơn bị từ chối, không có số âm, không có lỗi 500.
 
-**Công cụ:** k6, [scripts/flashsale-k6.js](../scripts/flashsale-k6.js), executor `shared-iterations`, 100 VU × 100 iteration. Mỗi VU là một user thật, có token và địa chỉ riêng, được tạo trong `setup()`. Request gọi thẳng order-service (:8083), không qua gateway, để rate limit không chặn trước phần cần đo.
+**Công cụ:** k6, [scripts/load-test/flashsale-k6.js](../scripts/load-test/flashsale-k6.js), executor `shared-iterations`, 100 VU × 100 iteration. Mỗi VU là một user thật, có token và địa chỉ riêng, được tạo trong `setup()`. Request gọi thẳng order-service (:8083), không qua gateway, để rate limit không chặn trước phần cần đo.
 
 **Môi trường:** toàn bộ stack và k6 chạy trên cùng một máy bằng Docker Compose; order-service giới hạn 512 MB, Hikari pool 20, Redisson `tryLock` chờ tối đa 3 giây. Mỗi cấu hình chạy 1 lần; p95 chỉ dùng để so sánh tương đối giữa các cấu hình, không phải số đo năng lực hệ thống.
 
@@ -10,14 +10,14 @@
 
 ```powershell
 # 1. Reset kho về 10 và xóa các đơn FLASH-001 cũ
-Get-Content scripts\flashsale-reset.sql | docker exec -i ecommerce-postgres psql -U postgres -d order_db
+Get-Content scripts\sql\flashsale-reset.sql | docker exec -i ecommerce-postgres psql -U postgres -d order_db
 
 # 2. Chạy k6 (Docker Desktop Windows: nếu --network host không tới được localhost
 #    thì thay bằng: docker run --rm -i -e HOST=host.docker.internal grafana/k6 run -)
-Get-Content scripts\flashsale-k6.js | docker run --rm -i --network host grafana/k6 run -
+Get-Content scripts\load-test\flashsale-k6.js | docker run --rm -i --network host grafana/k6 run -
 
 # 3. Kiểm tra: phải ra 0|10 và 10|10
-Get-Content scripts\flashsale-verify.sql | docker exec -i ecommerce-postgres psql -U postgres -d order_db
+Get-Content scripts\sql\flashsale-verify.sql | docker exec -i ecommerce-postgres psql -U postgres -d order_db
 
 # Trong lúc k6 chạy (terminal khác): quan sát khóa phân tán
 docker exec -it ecommerce-redis redis-cli --scan --pattern "lock:inventory:*"
@@ -59,7 +59,7 @@ Lần chạy đầu tiên (lock bật, ngay sau khi container order-service vừ
 
 ## Load test thông lượng qua gateway (13/10/2026)
 
-**Kịch bản:** [scripts/load-order-k6.js](../scripts/load-order-k6.js), executor `ramping-arrival-rate`.
+**Kịch bản:** [scripts/load-test/load-order-k6.js](../scripts/load-test/load-order-k6.js), executor `ramping-arrival-rate`.
 - **Mức tải:** 50 → 100 → 500 → 1000 request/giây, giữ 1000 req/s trong 30 giây, rồi giảm về 0. Tổng 2 phút.
 - **Request:** mỗi request là `POST /api/v1/orders` mua 1 `LOAD-001`, **đi qua API Gateway** (JWT + rate limit).
 - **Người mua:** 300 user thật, được tạo trong `setup()`.

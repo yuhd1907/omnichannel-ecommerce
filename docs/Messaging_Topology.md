@@ -78,7 +78,7 @@ Ba service phát event dùng cùng một thiết kế relay. `OutboxRelay` chạ
 
 **Vì sao broker chết không tính là retry:** relay chạy mỗi giây. Nếu tính, broker chết 10 giây sẽ đẩy toàn bộ event sang `FAILED` và phải sửa tay, trái với mục đích của outbox là để order-service tiếp tục nhận đơn khi broker chết.
 
-Cấu hình bắt buộc (`order-service/application.yml`): `publisher-confirm-type: correlated`, `publisher-returns: true`, `template.mandatory: true`. Không có confirm thì `send()` thành công chỉ nghĩa là byte đã rời socket; broker sập ngay sau đó là mất event trong khi DB ghi `SENT`.
+Cấu hình bắt buộc (`backend/order-service/application.yml`): `publisher-confirm-type: correlated`, `publisher-returns: true`, `template.mandatory: true`. Không có confirm thì `send()` thành công chỉ nghĩa là byte đã rời socket; broker sập ngay sau đó là mất event trong khi DB ghi `SENT`.
 
 `management.health.rabbit.enabled: false` trong order/payment/product-service: broker chết không được làm service bị Docker đánh dấu unhealthy, vì lúc đó nó đang hoạt động đúng thiết kế.
 
@@ -130,7 +130,7 @@ Commit xong mới publish (ngoài transaction, như cũ). Hai instance chạy c�
 
 `ProductEventListener` nhận `PRODUCT_SKU_CREATED` và chạy `INSERT INTO inventory (sku_code, 0, 0, 0) ON CONFLICT (sku_code) DO NOTHING`: SKU mới có sẵn dòng kho `available_qty = 0`, admin chỉ cần nhập số lượng. Idempotent tự nhiên (nhận lại event, hoặc admin đã nhập kho trước đó, đều không đổi dữ liệu) nên không cần bảng `processed_messages`. JSON hỏng / thiếu `skuCode` → DLQ ngay.
 
-SKU có sẵn từ migration seed của product không sinh event; kho của 15 SKU mẫu được seed bằng `order-service/V4__seed_inventory_sample_skus.sql` (50 cái mỗi SKU, `ON CONFLICT DO NOTHING` nên không ghi đè kho đã có), `LOAD-001` do `scripts/load-reset.sql` quản lý.
+SKU có sẵn từ migration seed của product không sinh event; kho của 15 SKU mẫu được seed bằng `backend/order-service/V4__seed_inventory_sample_skus.sql` (50 cái mỗi SKU, `ON CONFLICT DO NOTHING` nên không ghi đè kho đã có), `LOAD-001` do `scripts/sql/load-reset.sql` quản lý.
 
 ## 7. Hạn chế đã biết
 

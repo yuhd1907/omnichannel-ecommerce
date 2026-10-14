@@ -54,3 +54,6 @@ data/
 postgres_data/
 redis_data/
 rabbitmq_data/
+
+# Anh chup / snapshot khi test giao dien bang Playwright
+.playwright-mcp/

@@ -17,11 +17,11 @@ Yêu cầu kỹ thuật trọng tâm:
 
 | | |
 | --- | --- |
-| Service | 6 Spring Boot service (gateway + 5 nghiệp vụ) + 2 module dùng chung |
+| Service | 6 Spring Boot service (gateway + 5 nghiệp vụ) + 2 module dùng chung + web Next.js |
 | Database | 5 PostgreSQL (database per service), schema quản lý bằng Flyway |
-| API | Hơn 30 endpoint REST, 2 RPC gRPC, tài liệu Swagger gom tại gateway |
+| API | Hơn 30 endpoint REST, 2 RPC gRPC, spec OpenAPI 3.1 sinh từ code (`docs/api/`) |
 | Event | 8 loại event qua RabbitMQ (5 `order.*`, 2 `payment.*`, 1 `product.*`), mỗi queue có DLQ |
-| Kiểm thử | 145 unit test chạy trong CI + 39 integration test; Postman smoke 3 kịch bản; 2 kịch bản k6 |
+| Kiểm thử | 145 unit test chạy trong CI + 39 integration test; smoke test end-to-end (`scripts/smoke-test.mjs`); 2 kịch bản k6 |
 | Load test | Giữ **1000 req/s** đặt hàng qua gateway (trung vị 10 ms); 66.784 request, kho 1000 → đúng 1000 đơn, không bán vượt |
 | Triển khai | VPS thật, HTTPS, CI/CD tự động: https://huyecommerce.duckdns.org |
 
@@ -31,15 +31,15 @@ Yêu cầu kỹ thuật trọng tâm:
 
 | Chức năng | Service | Xem trong demo |
 | --- | --- | --- |
-| Đăng ký, đăng nhập, refresh token, phân quyền `USER` / `ADMIN` | identity | Postman folder 1–2 |
-| Địa chỉ giao hàng | identity | Postman SM08 |
-| Danh mục, sản phẩm, SKU biến thể (JSONB), admin CRUD | product | Swagger |
+| Đăng ký, đăng nhập, refresh token, phân quyền `USER` / `ADMIN` | identity | Web (modal đăng nhập), trang Quản trị |
+| Địa chỉ giao hàng | identity | Web (trang đặt hàng) |
+| Danh mục, sản phẩm, SKU biến thể (JSONB), admin CRUD | product | Web (cửa hàng, chi tiết sản phẩm) |
 | Tìm kiếm toàn văn (`tsvector`, không dấu, gõ dở vẫn khớp) | product | Demo 2b |
 | Đặt hàng, giữ hàng, xem / hủy đơn; `Idempotency-Key` chống tạo đơn trùng khi gửi lại | order | S1, demo 2b |
-| Thanh toán MOCK (webhook ký HMAC) và **VNPAY sandbox** (IPN ký HMAC-SHA512) | payment | S1, S2, demo 2b |
+| **Thanh toán khi nhận hàng (COD)**: đơn xác nhận ngay, giao xong mới ghi nhận đã thu tiền; **VNPAY sandbox** (thẻ / VNPAY-QR, IPN ký HMAC-SHA512) | payment, order | S1, S2, S3 |
 | Tự hủy đơn không thanh toán sau 15 phút, trả kho | order | (nói, không demo) |
 | Vòng đời giao hàng `CONFIRMED → SHIPPING → COMPLETED` cho admin | order | S3 |
-| Quản trị tồn kho (nhập / điều chỉnh); SKU mới tự có dòng kho qua event `product.sku.created` | order | SM05 |
+| Quản trị tồn kho (nhập / điều chỉnh); SKU mới tự có dòng kho qua event `product.sku.created` | order | Web (Quản trị → Tồn kho) |
 | Email cho mọi bước của đơn (5 loại) | notification | Mailpit |
 
 ### 3.2 Kiến trúc phân tán
@@ -78,16 +78,17 @@ Yêu cầu kỹ thuật trọng tâm:
 ### 3.5 Vận hành và DevOps
 
 - Docker multi-stage, chạy toàn hệ thống bằng 1 lệnh `docker compose up`.
-- **CI/CD:** GitHub Actions chạy test → build 6 image → push GHCR → VPS tự kéo và deploy trong khoảng 2 phút.
-- **HTTPS** Let's Encrypt trên tên miền thật.
-- **Giám sát:** Prometheus + Grafana (request/giây, độ trễ p95, mã lỗi, heap JVM, connection DB, queue RabbitMQ).
+- **CI/CD:** GitHub Actions chạy test Java + kiểm tra/build frontend → build 7 image → push GHCR → VPS tự kéo và deploy trong khoảng 2 phút.
+- **HTTPS** Let's Encrypt (Certbot, tự gia hạn) trên tên miền thật; UFW chỉ mở 22/80/443, SSH chỉ dùng key, fail2ban.
+- **Giám sát (đủ 3 trụ cột):** metrics Prometheus + Grafana (request/giây, độ trễ p95, mã lỗi, heap JVM, connection DB, queue RabbitMQ); log tập trung **Loki + Promtail**; trace phân tán **OpenTelemetry → Jaeger** qua gateway, REST, Feign, gRPC, RabbitMQ. Mọi response có `traceId`, tra được log và trace của đúng request.
+- **Web:** frontend Next.js 16 (`frontend/`) cho khách và admin, chạy sau Nginx cùng tên miền.
 - **Tài liệu:** thiết kế DDD + API contract, ERD 5 database, sơ đồ kiến trúc và RabbitMQ, hướng dẫn vận hành.
 
 ## 4. Chưa làm được / làm khác đề bài
 
 | Hạng mục | Hiện trạng | Lý do chính |
 | --- | --- | --- |
-| **Giao diện Web / Mobile** | Chưa có. Hệ thống cung cấp API; demo bằng Swagger và Postman | Tập trung thời gian vào backend phân tán, là trọng tâm của đề tài |
+| **App Mobile** | Chưa có; đã có **web Next.js** cho khách và admin. API đã nhận `channel=MOBILE` | Web đủ để demo luồng; app mobile dùng lại toàn bộ API |
 | **Cổng thanh toán thật** | VNPAY **sandbox** qua `VnpayAdapter` (cần đăng ký TMN code); chưa có MoMo / QR | Môi trường thật cần hợp đồng merchant |
 | **Hoàn tiền tự động** | Đánh dấu `needs_refund`, đối soát thủ công | Mỗi cổng có API hoàn tiền riêng, là một luồng nghiệp vụ đầy đủ |
 | **MongoDB** cho catalog | PostgreSQL + `JSONB` | Dữ liệu có quan hệ và ràng buộc; một engine dễ vận hành hơn |
@@ -95,7 +96,7 @@ Yêu cầu kỹ thuật trọng tâm:
 | **Inventory service riêng** | Gộp vào Order (chung `order_db`) | Giữ hàng phải nguyên tử với tạo đơn; tách ra thành giao dịch phân tán |
 | **Thông báo SMS** | Chỉ email (Mailpit) | Cần nhà cung cấp trả phí; về kiến trúc giống email |
 | **Tốc độ bán một SKU nóng** | Khoảng 30 đơn/giây (các đơn cùng SKU đi tuần tự qua khóa); request chờ quá 3 giây nhận `409 INVENTORY_BUSY` | Chọn tính đúng trước; hướng tăng tốc: chia kho nhiều dòng, xếp hàng đơn qua queue |
-| **CD qua SSH, SSL tự gia hạn** | CD kiểu pull (cron 2 phút); SSL cấp qua DNS-01, gia hạn tay 90 ngày | Nhà cung cấp VPS chặn kết nối quốc tế vào cổng 22 và 80 (đã xác minh bằng tcpdump) |
+| **CD qua SSH** | CD kiểu pull (cron 2 phút). SSL nay đã cấp bằng HTTP-01 và tự gia hạn như đề tài | Nhà cung cấp VPS chặn kết nối quốc tế vào cổng 22 (đã xác minh bằng tcpdump) |
 
 **Hạn chế đã biết:**
 - Lần gọi đầu tiên sau khi service khởi động có thể trả 503 (khởi tạo gRPC/Feign chậm), gửi lại là được.
@@ -113,4 +114,5 @@ Yêu cầu kỹ thuật trọng tâm:
 - Elasticsearch đồng bộ từ event `product.*` khi dữ liệu lớn.
 - Dọn bảng `idempotency_keys` định kỳ (giữ khoảng 24 giờ).
 - Hoàn tiền tự động qua API hoàn tiền của VNPAY cho các payment `needs_refund`.
-- Giao diện web / app mobile dùng chung API.
+- App mobile dùng chung API với web.
+- Truyền trace context qua Outbox (lưu `traceparent` cùng event) để một trace nối liền request → event → consumer.

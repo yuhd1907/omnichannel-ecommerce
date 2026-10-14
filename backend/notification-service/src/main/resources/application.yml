@@ -1,0 +1,116 @@
+spring:
+  application:
+    name: notification-service
+  autoconfigure:
+    # Khong co user nao dang nhap vao service nay (xem NotificationSecurityConfig);
+    # bo user in-memory de khong in mat khau sinh ngau nhien ra log.
+    exclude: org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
+  datasource:
+    url: ${NOTIFICATION_DATASOURCE_URL:jdbc:postgresql://localhost:5432/notification_db}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:postgrespassword}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_DEFAULT_USER:guest}
+    password: ${RABBITMQ_DEFAULT_PASS:guest}
+    listener:
+      simple:
+        observation-enabled: true
+        # Het retry -> reject khong requeue -> DLX -> DLQ. Khong requeue vo han.
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          # Boot 4 dung 'max-retries' (so lan thu LAI), KHONG con 'max-attempts'
+          # (key sai bi bo qua im lang). 2 lan thu lai = tong 3 lan xu ly.
+          max-retries: 2
+          initial-interval: 1s
+          multiplier: 2
+          max-interval: 5s
+
+    template:
+      observation-enabled: true
+  # SMTP: Mailpit khi chay Docker (xem docker-compose.yml). Timeout ngan de SMTP chet
+  # khong giu thread listener cua RabbitMQ lau.
+  # SMTP: Mailpit khi dev/demo (khong dang nhap). Prod: SMTP that (Gmail App Password, Brevo, SES...)
+  # dat SMTP_* trong .env -> docker-compose truyen vao MAIL_* (xem .env.example).
+  mail:
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:1025}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail.smtp.auth: ${MAIL_SMTP_AUTH:false}
+      mail.smtp.starttls.enable: ${MAIL_STARTTLS:false}
+      mail.smtp.starttls.required: ${MAIL_STARTTLS:false}
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 10000
+      mail.smtp.writetimeout: 10000
+
+app:
+  mail:
+    # false: chi ghi log [EMAIL GIA LAP] nhu truoc, khong ket noi SMTP
+    enabled: ${MAIL_ENABLED:false}
+    from: ${MAIL_FROM:no-reply@omnichannel.local}
+    from-name: ${MAIL_FROM_NAME:gom.}
+    # Gui lai email loi: quet moi 30 giay (backoff 1/5/15/30 phut, toi da 5 lan -> FAILED)
+    retry-interval-ms: ${MAIL_RETRY_INTERVAL_MS:30000}
+  # Link "Xem don hang" trong email
+  public-url: ${APP_PUBLIC_URL:http://localhost:3001}
+
+server:
+  port: ${NOTIFICATION_PORT:8085}
+
+management:
+  # Distributed tracing (Micrometer Tracing + OpenTelemetry) -> Jaeger qua OTLP HTTP.
+  # Demo lay mau 100%; prod tai cao nen ha TRACING_SAMPLING_PROBABILITY (vd 0.1).
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+  opentelemetry:
+    resource-attributes:
+      deployment.environment: ${DEPLOY_ENV:local}
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTLP_TRACING_ENDPOINT:http://localhost:4318/v1/traces}
+  # Starter OpenTelemetry kem theo exporter metrics/log OTLP: tat, metrics da co Prometheus,
+  # log da co Promtail -> Loki (Jaeger chi nhan trace).
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  logging:
+    export:
+      otlp:
+        enabled: false
+  observations:
+    enable:
+      # Outbox relay / expiry job @Scheduled chay moi giay -> moi lan 1 trace rong, lam ngap Jaeger
+      tasks.scheduled: false
+      # Span cua tung security filter: nhieu va khong giup doc luong nghiep vu
+      spring.security: false
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    distribution:
+      # Histogram de Grafana tinh p95/p99 bang histogram_quantile
+      percentiles-histogram:
+        http.server.requests: true
+  health:
+    mail:
+      # Gui mail la best-effort; Mailpit chet khong duoc lam service bi danh dau unhealthy
+      enabled: false

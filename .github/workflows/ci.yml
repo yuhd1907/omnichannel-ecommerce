@@ -1,6 +1,6 @@
 # Build + unit test moi module. GitHub Actions tu dat CI=true -> build.gradle bo cac test
 # @Tag("integration") (can Postgres/Redis/RabbitMQ). Chay du ca integration o may local:
-#   docker compose up -d --wait  roi  ./gradlew build
+#   docker compose up -d --wait  roi  cd backend && ./gradlew build
 name: CI
 
 on:
@@ -10,8 +10,11 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  backend:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
 
@@ -31,4 +34,25 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-reports
-          path: '**/build/reports/tests/'
+          path: 'backend/**/build/reports/tests/'
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+      # PageProps/LayoutProps la kieu Next sinh ra (.next/types) -> phai typegen truoc tsc
+      - run: npx next typegen
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      - run: npm run build

@@ -1,0 +1,41 @@
+# Promtail doc log moi container qua Docker API (docker.sock), gan nhan container/service roi day vao Loki.
+# Ghi chu: Grafana da chuyen Promtail sang Alloy (Promtail EOL 03/2026); de tai yeu cau Promtail nen
+# giu Promtail 3.5 (ban cuoi), doi sang Alloy chi can thay file nay + image.
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 10s
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: container
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: service
+      - source_labels: ['__meta_docker_container_log_stream']
+        target_label: stream
+    pipeline_stages:
+      # Chi log Spring Boot: gop stack trace nhieu dong thanh 1 entry, tach level
+      - match:
+          selector: '{service=~".+-service|api-gateway"}'
+          stages:
+            - multiline:
+                firstline: '^\d{4}-\d{2}-\d{2}'
+                max_wait_time: 3s
+            - regex:
+                expression: '^\S+\s+(?P<level>TRACE|DEBUG|INFO|WARN|ERROR)\s'
+            - labels:
+                level:
+      # traceId khong lam nhan (moi request 1 gia tri -> bung so stream); Grafana tach tu noi dung
+      # dong log bang derived field (datasource Loki) va mo thang trace trong Jaeger.
