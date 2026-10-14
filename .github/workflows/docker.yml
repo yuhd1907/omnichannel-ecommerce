@@ -132,3 +132,52 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
+
+  deploy:
+    name: Deploy to VPS
+    needs:
+      - build
+      - frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy through SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          port: ${{ secrets.VPS_PORT }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          timeout: 30s
+          command_timeout: 15m
+          script: |
+            set -eu
+
+            cd /home/huy/omnichannel-ecommerce
+
+            git fetch --prune origin main
+            git checkout main
+            git pull --ff-only origin main
+
+            compose() {
+              docker compose \
+                -f docker-compose.yml \
+                -f docker-compose.prod.yml \
+                "$@"
+            }
+
+            SERVICES="api-gateway identity-service product-service order-service payment-service notification-service frontend"
+
+            compose pull $SERVICES
+            compose up -d --remove-orphans --wait --wait-timeout 300
+
+            curl --fail --silent --show-error \
+              http://127.0.0.1:8080/actuator/health |
+              grep -q '"status":"UP"'
+
+            curl --fail --silent --show-error \
+              http://127.0.0.1:3001/ > /dev/null
+
+            compose ps
+            echo "Deployment completed successfully"
