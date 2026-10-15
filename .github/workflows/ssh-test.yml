@@ -1,0 +1,27 @@
+name: Test VPS SSH
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ssh-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Connect to VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          port: ${{ secrets.VPS_PORT }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          timeout: 30s
+          command_timeout: 2m
+          script: |
+            set -eu
+            echo "SSH connection successful"
+            hostname
+            whoami
+            docker --version
+            docker compose version
