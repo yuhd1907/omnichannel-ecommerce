@@ -18,7 +18,7 @@ Ký hiệu: **[VPS]** là lệnh bash chạy trên VPS (prompt `huy@azvps-...`),
 | 7 | Chịu lỗi: RabbitMQ chết vẫn nhận đơn | 2 phút | Terminal VPS, Web |
 | 7b | Chịu lỗi: tắt Notification vẫn đặt hàng | 1 phút | Terminal VPS, Web, RabbitMQ UI, Mailpit |
 | 8 | Giám sát (metrics, log, trace) + load test | 3 phút | Grafana (Prometheus, Loki), Jaeger, kết quả k6 |
-| 9 | CI/CD | 1 phút | GitHub Actions, log cron |
+| 9 | CI/CD | 1 phút | GitHub Actions (job Deploy to VPS), terminal VPS |
 | | Hỏi đáp | | Bảng câu hỏi cuối file |
 
 ---
@@ -27,16 +27,10 @@ Ký hiệu: **[VPS]** là lệnh bash chạy trên VPS (prompt `huy@azvps-...`),
 
 ### 0.1 Khóa deploy tự động
 
-Merge vào `main` trong lúc demo sẽ làm hệ thống khởi động lại 1–3 phút. Tạm tắt cron:
+Merge vào `main` sẽ chạy job *Deploy to VPS* và khởi động lại hệ thống 1–3 phút. Trong ngày demo:
 
-```bash
-# [VPS] tắt
-crontab -l | sed 's|^\([^#].*auto-deploy.sh.*\)|#\1|' | crontab -
-crontab -l          # dòng auto-deploy phải có dấu # ở đầu
-
-# [VPS] bật lại sau buổi demo
-crontab -l | sed 's|^#\(.*auto-deploy.sh.*\)|\1|' | crontab -
-```
+- Không merge vào `main`.
+- Bật duyệt tay: GitHub → *Settings* → *Environments* → `production` → *Required reviewers* (chọn chính mình). Lỡ merge thì job deploy dừng ở *Waiting*, không tự khởi động lại hệ thống; tắt lại sau buổi demo nếu muốn deploy tự động.
 
 ### 0.2 Kiểm tra hệ thống
 
@@ -51,7 +45,7 @@ curl -s https://huyecommerce.duckdns.org/actuator/health; echo
 
 ### 0.3 Làm nóng và chuẩn bị tài khoản
 
-Order-service tự làm nóng Feign lúc khởi động và thử lại 1 lần khi identity lỗi tạm thời, nên không còn `503` ở đơn đầu; lời gọi gRPC đầu tiên vẫn hơi chậm. Chạy smoke test một lần trên máy mình (đi hết đăng ký → đặt hàng → thanh toán → `CONFIRMED`, in `OK` từng bước):
+Order-service đã có bản sửa lỗi `503` ở đơn đầu: tự làm nóng Feign lúc khởi động và thử lại 1 lần khi identity lỗi tạm thời (có unit test, chưa đo lại dưới tải); lời gọi gRPC đầu tiên vẫn hơi chậm. Chạy smoke test một lần trên máy mình (đi hết đăng ký → đặt hàng → thanh toán → `CONFIRMED`, in `OK` từng bước):
 
 ```powershell
 # [PS] thư mục gốc repo
@@ -219,15 +213,18 @@ Khoảng 30–60 giây sau khi service healthy: queue về 0, Mailpit nhận th�
 
 ## 9. CI/CD (1 phút)
 
-Tab **Actions**: workflow "Docker Build & Push" chạy test → build 7 image (6 service + frontend) → push GHCR với tag `sha-xxxxxxx` và `latest`. Trên VPS:
+Tab **Actions**: workflow "Docker Build & Push" chạy test → build 7 image (6 service + frontend) → push GHCR với tag `sha-xxxxxxx` và `latest` → job **Deploy to VPS** (`appleboy/ssh-action`, Environment `production`) SSH vào VPS chạy `scripts/deploy/deploy.sh sha-xxxxxxx`. Mở log job deploy: dòng `deploy: sha-cũ -> sha-mới` và `deploy OK`.
 
 ```bash
-# [VPS] log của cron (đường dẫn sau dấu >> trong crontab -l)
-crontab -l | grep auto-deploy
-tail -20 <đường dẫn log ở trên>
+# [VPS] bản đang chạy = tag của commit vừa merge
+grep IMAGE_TAG /home/huy/omnichannel-ecommerce/.env
+docker ps --format '{{.Names}}\t{{.Image}}' | grep omnichannel
 ```
 
-Nói lý do không dùng SSH-push: nhà cung cấp VPS chặn kết nối quốc tế vào cổng 22 (đã xác minh bằng tcpdump), nên VPS tự kéo image mỗi 2 phút (xem `docs/Scope_Adjustments.md` mục 6).
+Nói 3 ý:
+1. Production chạy tag bất biến `sha-<commit>`, không dùng `latest`: biết chính xác commit nào đang chạy, quay lại bản cũ bằng `bash scripts/deploy/deploy.sh sha-<commit cũ>`.
+2. `docker compose up --wait` chờ health check rồi gọi thử gateway + frontend; không đạt thì script tự `up` lại tag trước và job báo đỏ.
+3. Action SSH pin theo commit SHA; job gắn Environment `production`, bật được duyệt tay trước khi deploy.
 
 ---
 
@@ -250,7 +247,7 @@ Nói lý do không dùng SSH-push: nhà cung cấp VPS chặn kết nối quốc
 
 | Hiện tượng | Xử lý |
 | --- | --- |
-| `503 ..._UNAVAILABLE` khi tạo đơn | Lỗi cold-start Feign đã sửa (warm-up + thử lại 1 lần), nên nếu vẫn gặp thì service phía sau đang down thật: xem `docker ps` và log identity/product. Bấm đặt hàng lại an toàn (web giữ cùng `Idempotency-Key`, không tạo đơn trùng). |
+| `503 ..._UNAVAILABLE` khi tạo đơn | Đã có bản sửa cho lỗi cold-start Feign (warm-up + thử lại 1 lần, chưa kiểm chứng dưới tải). Gặp thì xem `docker ps` và log order/identity/product (`Select-String "retrying"`). Bấm đặt hàng lại an toàn (web giữ cùng `Idempotency-Key`, không tạo đơn trùng). |
 | Web báo "Phiên đăng nhập đã hết hạn" | Refresh token hết hạn hoặc bị thu hồi: đăng nhập lại trên modal vừa hiện ra. |
 | Đơn vẫn `Chờ thanh toán` sau khi bấm thành công | Đợi 3–5 giây, trang tự hỏi lại mỗi 2 giây (relay chạy theo chu kỳ). |
 | Không có thư trong Mailpit | Kiểm tra tunnel còn mở; `docker logs ecommerce-notification-service --tail 20` tìm dòng `[EMAIL ĐÃ GỬI]`. |

@@ -79,7 +79,7 @@ Yêu cầu kỹ thuật trọng tâm:
 ### 3.5 Vận hành và DevOps
 
 - Docker multi-stage, chạy toàn hệ thống bằng 1 lệnh `docker compose up`.
-- **CI/CD:** GitHub Actions chạy test Java + kiểm tra/build frontend → build 7 image → push GHCR → VPS tự kéo và deploy trong khoảng 2 phút.
+- **CI/CD:** GitHub Actions chạy test Java + kiểm tra/build frontend → build 7 image → push GHCR (tag `sha-<commit>`) → job *Deploy to VPS* dùng `appleboy/ssh-action` SSH vào VPS, deploy đúng tag đó, chờ health check, lỗi thì tự quay lại bản trước.
 - **HTTPS** Let's Encrypt (Certbot, tự gia hạn) trên tên miền thật; UFW chỉ mở 22/80/443, SSH chỉ dùng key, fail2ban.
 - **Giám sát (đủ 3 trụ cột):** metrics Prometheus + Grafana (request/giây, độ trễ p95, mã lỗi, heap JVM, connection DB, queue RabbitMQ); log tập trung **Loki + Promtail**; trace phân tán **OpenTelemetry → Jaeger** qua gateway, REST, Feign, gRPC, RabbitMQ. Mọi response có `traceId`, tra được log và trace của đúng request.
 - **Web:** frontend Next.js 16 (`frontend/`) cho khách và admin, chạy sau Nginx cùng tên miền.
@@ -97,10 +97,9 @@ Yêu cầu kỹ thuật trọng tâm:
 | **Inventory service riêng** | Gộp vào Order (chung `order_db`) | Giữ hàng phải nguyên tử với tạo đơn; tách ra thành giao dịch phân tán |
 | **Thông báo SMS** | Chỉ email (Mailpit) | Cần nhà cung cấp trả phí; về kiến trúc giống email |
 | **Tốc độ bán một SKU nóng** | Khoảng 30 đơn/giây (các đơn cùng SKU đi tuần tự qua khóa); request chờ quá 3 giây nhận `409 INVENTORY_BUSY` | Chọn tính đúng trước; hướng tăng tốc: chia kho nhiều dòng, xếp hàng đơn qua queue |
-| **CD qua SSH** | CD kiểu pull (cron 2 phút). SSL nay đã cấp bằng HTTP-01 và tự gia hạn như đề tài | Nhà cung cấp VPS chặn kết nối quốc tế vào cổng 22 (đã xác minh bằng tcpdump) |
 
 **Hạn chế đã biết:**
-- Lỗi `503` ở lần gọi Feign đầu tiên sau khi khởi động **đã sửa** (làm nóng lúc khởi động + thử lại 1 lần, [chi tiết](Flashsale_Results.md#phát-hiện-phụ-lỗi-503-ở-lần-chạy-đầu-sau-khi-khởi-động-đã-sửa)); lời gọi gRPC đầu tiên vẫn chậm hơn bình thường.
+- Lỗi `503` ở lần gọi Feign đầu tiên sau khi khởi động: **đã có bản sửa và unit test** (làm nóng lúc khởi động + thử lại 1 lần), **chưa kiểm chứng lại dưới tải** ([chi tiết](Flashsale_Results.md#phát-hiện-phụ-lỗi-503-ở-lần-chạy-đầu-sau-khi-khởi-động-đã-có-bản-sửa)); lời gọi gRPC đầu tiên vẫn chậm hơn bình thường.
 - Load test chưa chứng minh được 500–1.000 đơn thành công/giây (xem 3.1).
 - Web chỉ truy cập được từ Việt Nam.
 
@@ -110,7 +109,8 @@ Yêu cầu kỹ thuật trọng tâm:
 2. Outbox phía Product: SKU mới tự có dòng kho ở order-service.
 3. VNPAY sandbox qua `PaymentGatewayAdapter` có sẵn (IPN + return URL).
 4. Tìm kiếm toàn văn bằng `tsvector` (Elasticsearch để bước sau).
-5. Sửa lỗi `503` lúc order-service vừa khởi động: `FeignWarmup` + thử lại 1 lần khi lỗi tạm thời.
+5. Bản sửa lỗi `503` lúc order-service vừa khởi động: `FeignWarmup` + thử lại 1 lần khi lỗi tạm thời (có unit test, chưa kiểm chứng dưới tải).
+6. CD qua SSH (`appleboy/ssh-action`) thay cho cron: deploy tag bất biến `sha-<commit>`, tự quay lại bản trước khi health check lỗi, GitHub Environment `production`.
 
 ## 6. Hướng phát triển tiếp
 

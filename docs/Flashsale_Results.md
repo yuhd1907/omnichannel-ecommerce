@@ -46,18 +46,41 @@ k6 tự đánh dấu **FAIL** nếu `created_201 ≠ 10` hoặc có bất kỳ m
 - **Lock không làm chậm đáng kể ở quy mô này.** p95 781 ms (bật) so với 738 ms (tắt). Lock tuần tự hóa phần giao dịch kho; giả thuyết là phần này ngắn so với các lời gọi trước lock (Feign lấy địa chỉ, gRPC lấy giá) nên ít ảnh hưởng tới p95. Chưa đo tách từng đoạn; muốn khẳng định cần log thời gian từng bước hoặc tracing. Không request nào phải chờ lock quá 3 giây (`INVENTORY_BUSY = 0`).
 - **Lock có giá trị khi tranh chấp lớn hơn:** khi tắt lock, cả 100 request cùng mở transaction và tranh một dòng `inventory`, giữ connection trong lúc chờ khóa dòng. Ở 100 request với pool 20 thì chưa thấy lỗi chờ connection; tải lớn hơn hoặc pool nhỏ hơn sẽ làm lớp này lộ ra trước.
 
-## Phát hiện phụ: lỗi 503 ở lần chạy đầu sau khi khởi động (đã sửa)
+## Phát hiện phụ: lỗi 503 ở lần chạy đầu sau khi khởi động (đã có bản sửa)
 
 Lần chạy đầu tiên (lock bật, ngay sau khi container order-service vừa được tạo lại) cho **10 × 201, 50 × 409, 40 × 503 `IDENTITY_SERVICE_UNAVAILABLE`**, p95 2,64 giây. Kho vẫn đúng `0 | 10`, `10 | 10`.
 
 - **Nguyên nhân:** cả 40 lỗi đều là `'messageConverters' must not be empty` từ Spring Cloud OpenFeign. Feign khởi tạo `HttpMessageConverters` theo kiểu lazy và không thread-safe; loạt 100 request là lời gọi Feign đầu tiên sau khi khởi động, nên một phần thread thấy danh sách converter còn rỗng.
 - **Không liên quan đến tải:** chạy lại khi service đã "ấm" thì 0 lỗi.
 - **Trong thử nghiệm:** `setup()` của k6 gọi một đơn với SKU không tồn tại để khởi tạo Feign trước (trả 400, không đụng tới kho).
-- **Đã sửa trong sản phẩm (15/10/2026), hai lớp:**
+- **Bản sửa (15/10/2026), hai lớp; có unit test, chưa kiểm chứng lại dưới tải:**
   - **Làm nóng lúc khởi động:** `FeignWarmup` (`ApplicationRunner`) gọi `GET /actuator/health` của identity một lần, tuần tự, ngay khi order-service khởi động. Response 200 có body JSON nên đi qua đúng bước decode; phần khởi tạo lười chạy xong trên một thread trước khi có traffic. Lỗi ở bước này chỉ ghi log, không chặn khởi động.
   - **Thử lại 1 lần:** `OrderServiceImpl.callIdentity` thử lại đúng 1 lần (nghỉ 100 ms, cấu hình `order.identity.retry-delay-ms`) khi lỗi là tạm thời: lỗi decode, lỗi mạng, `5xx`. `404` vẫn trả `ADDRESS_NOT_FOUND`; `4xx` khác không thử lại. Lời gọi là `GET` nên thử lại an toàn. Lớp này che khe hở nhỏ giữa lúc Tomcat nhận request và lúc warm-up chạy xong.
   - **Unit test:** `OrderServiceImplTest` (lỗi decode lần đầu → thử lại rồi thành công; `503` liên tiếp → gọi đúng 2 lần rồi trả `503`, không lấy lock, không đụng kho; `400` → không thử lại) và `FeignWarmupTest`.
-  - **Chưa đo lại bằng k6** ngay sau khi tạo lại container. Cách kiểm chứng: `docker compose up -d --force-recreate order-service`, chờ healthy, tạm bỏ bước làm nóng trong `setup()` của `flashsale-k6.js` rồi chạy; kỳ vọng `0 × 503`.
+  - **Chưa kiểm chứng dưới tải thật:** xem mục *Kiểm chứng lại sau bản sửa* ngay dưới.
+
+### Kiểm chứng lại sau bản sửa (chưa chạy)
+
+Tái tạo đúng điều kiện đã gây lỗi: order-service vừa được tạo lại, loạt 100 request là các lời gọi Feign đầu tiên từ request thật, **không** làm nóng từ phía k6 (`WARMUP=0`). Chạy trên stack local (k6 gọi thẳng `:8083`, `:8081`; VPS không mở các cổng này).
+
+```powershell
+# [PS] thư mục gốc repo, stack local đang chạy (docker compose up -d)
+docker compose up -d --build --force-recreate --wait order-service   # build lại để có FeignWarmup + retry
+docker logs ecommerce-order-service 2>&1 | Select-String "Feign warm-up"
+Get-Content scripts\sql\flashsale-reset.sql | docker exec -i ecommerce-postgres psql -U postgres -d order_db
+Get-Content scripts\load-test\flashsale-k6.js | docker run --rm -i --network host -e WARMUP=0 grafana/k6 run -
+Get-Content scripts\sql\flashsale-verify.sql | docker exec -i ecommerce-postgres psql -U postgres -d order_db
+docker logs ecommerce-order-service 2>&1 | Select-String "retrying|identity-service unavailable"
+```
+
+**Đạt khi:** `created_201 = 10`, `other_status = 0` (không có `503 IDENTITY_SERVICE_UNAVAILABLE`), kho `0 | 10` và `10 | 10`. Có dòng `retrying` nghĩa là lớp thử lại đã phải can thiệp (warm-up chưa đủ); không có nghĩa là warm-up đã đủ.
+
+| Lần | Điều kiện | 201 | 409 | 503 | Ghi chú |
+| --- | --- | --- | --- | --- | --- |
+| Trước bản sửa (13/10) | vừa tạo lại container, k6 chưa làm nóng | 10 | 50 | 40 | `'messageConverters' must not be empty` |
+| Sau bản sửa | vừa tạo lại container, `WARMUP=0` | _chưa chạy_ | | | |
+
+Cho tới khi có kết quả dòng thứ hai: nói "đã có bản sửa và unit test", không nói "đã chứng minh hết lỗi trong thực tế".
 
 ---
 

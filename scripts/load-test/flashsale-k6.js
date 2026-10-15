@@ -10,6 +10,10 @@
 // cua gateway se chan 100 request cung luc truoc khi toi phan can do (lock + conditional UPDATE).
 //
 // Tieu chi dat (kiem them bang SQL trong flashsale-reset.sql): dung 10 x 201, 0 ma khac 201/409.
+//
+// WARMUP=0: bo buoc lam nong order-service trong setup() -> loat 100 request la cac loi goi Feign
+// dau tien tu request that. Dung de kiem chung ban sua FeignWarmup + retry (Flashsale_Results.md):
+//   ... | docker run --rm -i --network host -e WARMUP=0 grafana/k6 run -
 
 import http from 'k6/http';
 import { check } from 'k6';
@@ -22,6 +26,7 @@ const IDENTITY_URL = __ENV.IDENTITY_URL || `http://${HOST}:8081`;
 const SKU          = __ENV.SKU || 'FLASH-001';
 const BUYERS       = Number(__ENV.BUYERS || 100);
 const STOCK        = Number(__ENV.STOCK || 10);
+const WARMUP       = (__ENV.WARMUP || '1') !== '0';
 
 const created201    = new Counter('created_201');
 const outOfStock409 = new Counter('out_of_stock_409');
@@ -81,10 +86,15 @@ export function setup() {
   // KHONG thread-safe -> neu loat 100 request la loi goi Feign dau tien sau khi khoi dong, mot phan
   // nhan 503 "'messageConverters' must not be empty". Goi 1 don voi SKU khong ton tai: Feign lay dia
   // chi chay truoc buoc kiem SKU -> duoc khoi tao, roi tra 400, khong dung toi kho.
-  const warm = http.post(`${ORDER_URL}/api/v1/orders`,
-    JSON.stringify({ channel: 'WEB', addressId: users[0].addressId, items: [{ skuCode: 'WARMUP-NO-SUCH-SKU', quantity: 1 }] }),
-    { headers: { ...JSON_HEADERS, Authorization: `Bearer ${users[0].token}` } });
-  console.log(`setup: warm-up order call -> ${warm.status} (expect 400 SKU_UNAVAILABLE)`);
+  // order-service nay da tu lam nong luc khoi dong (FeignWarmup); WARMUP=0 de kiem chung dieu do.
+  if (WARMUP) {
+    const warm = http.post(`${ORDER_URL}/api/v1/orders`,
+      JSON.stringify({ channel: 'WEB', addressId: users[0].addressId, items: [{ skuCode: 'WARMUP-NO-SUCH-SKU', quantity: 1 }] }),
+      { headers: { ...JSON_HEADERS, Authorization: `Bearer ${users[0].token}` } });
+    console.log(`setup: warm-up order call -> ${warm.status} (expect 400 SKU_UNAVAILABLE)`);
+  } else {
+    console.log('setup: WARMUP=0 -> khong lam nong, loat request dau tien la loi goi Feign dau tien');
+  }
 
   console.log(`setup: ${users.length} buyers ready, target ${ORDER_URL}, sku ${SKU}`);
   return { users };

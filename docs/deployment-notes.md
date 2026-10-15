@@ -5,16 +5,26 @@ Các thao tác vận hành cần làm bằng tay. Lệnh chạy trên máy đang
 ## Deploy tự động (CD)
 
 1. Merge vào `main` → GitHub Actions **Docker Build & Push** chạy test, build 7 image (6 service + `frontend`), push GHCR với tag `sha-xxxxxxx` và `latest`.
-2. Trên VPS, cron chạy `/home/huy/deploy/auto-deploy.sh` (bản sao của [scripts/deploy/auto-deploy.sh](../scripts/deploy/auto-deploy.sh)) mỗi 2 phút: `git reset --hard origin/main` + `docker compose pull`. Code hoặc image đổi thì `up -d --remove-orphans`.
+2. Job **Deploy to VPS** (GitHub Environment `production`) dùng `appleboy/ssh-action` (pin theo commit SHA) SSH vào VPS bằng các secret `VPS_HOST`, `VPS_PORT`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_HOST_FINGERPRINT`. Trên VPS: `git merge --ff-only` tới đúng commit vừa build, rồi chạy [scripts/deploy/deploy.sh](../scripts/deploy/deploy.sh) `sha-xxxxxxx`:
+   - pull 7 image của tag đó (lỗi thì dừng, bản đang chạy không bị đụng tới);
+   - `docker compose up -d --remove-orphans --wait` (chờ health check), gọi thử gateway `/actuator/health` và frontend;
+   - đạt → ghi `IMAGE_TAG=sha-xxxxxxx` vào `.env` (lệnh `docker compose` chạy tay sau này dùng đúng bản đang chạy), xóa image cũ, chỉ giữ tag hiện tại và tag trước;
+   - không đạt → `up` lại tag trước đó, job báo đỏ.
 
 ```bash
-crontab -l | grep auto-deploy                       # đường dẫn log nằm sau dấu >>
-tail -f /home/huy/deploy/auto-deploy.log            # chờ dòng "deploy: code xxx -> yyy"
+# [VPS] bản đang chạy
+grep IMAGE_TAG /home/huy/omnichannel-ecommerce/.env
+# [VPS] quay lại một bản cũ bằng tay (tag vẫn còn trên GHCR)
+cd /home/huy/omnichannel-ecommerce && bash scripts/deploy/deploy.sh sha-abc1234
 ```
 
-Cron chạy **bản sao** của script, không chạy file trong repo; sửa `scripts/deploy/auto-deploy.sh` (vd thêm image mới) thì phải chép lại: `cp /home/huy/omnichannel-ecommerce/scripts/deploy/auto-deploy.sh /home/huy/deploy/auto-deploy.sh`.
+Rollback chỉ đổi image, **không** đảo ngược migration Flyway. Migration phải tương thích ngược: chỉ thêm cột/bảng, không xóa hay đổi tên trong cùng một lần deploy.
 
-Mỗi lần deploy các service khởi động lại 1–3 phút. **Trước buổi demo tạm tắt cron** (lệnh ở [Demo_Script.md](Demo_Script.md) mục 0.1). File `.env` trên VPS không nằm trong git nên `git reset` không đụng tới; biến mới (vd `GRAFANA_ADMIN_PASSWORD`) phải tự thêm trước khi merge.
+**Duyệt tay trước khi deploy (tùy chọn):** GitHub → *Settings* → *Environments* → `production` → bật *Required reviewers*, chọn chính mình. Mỗi lần merge `main`, job deploy dừng ở *Waiting* tới khi bấm *Approve*. Nên bật trong ngày demo để lỡ merge cũng không làm hệ thống khởi động lại.
+
+Mỗi lần deploy các service khởi động lại 1–3 phút. File `.env` trên VPS không nằm trong git nên `git merge` không đụng tới (trừ dòng `IMAGE_TAG` do `deploy.sh` ghi); biến mới (vd `GRAFANA_ADMIN_PASSWORD`) phải tự thêm trước khi merge.
+
+**Trước 15/10/2026** CD chạy kiểu pull (cron 2 phút trên VPS) vì nhà cung cấp VPS chặn kết nối quốc tế vào cổng 22; nay đã chuyển sang SSH và gỡ cron. Kiểm tra VPS không còn dòng cron cũ: `crontab -l | grep auto-deploy` (còn thì xóa bằng `crontab -l | grep -v auto-deploy | crontab -`).
 
 ## Giám sát và công cụ demo
 
@@ -134,7 +144,7 @@ File cấu hình mẫu lưu tại [infra/nginx/omnichannel.conf](../infra/nginx/
 
 **1. Áp dụng cấu hình Nginx trên VPS**
 
-File đang chạy trên VPS là `/etc/nginx/sites-available/ecommerce.conf` (Certbot đã ghi vào file này). Khi sửa `infra/nginx/omnichannel.conf` trong repo, cron deploy **không** tự cập nhật Nginx; phải chép tay:
+File đang chạy trên VPS là `/etc/nginx/sites-available/ecommerce.conf` (Certbot đã ghi vào file này). Khi sửa `infra/nginx/omnichannel.conf` trong repo, CD **không** tự cập nhật Nginx; phải chép tay:
 
 ```bash
 cd /home/huy/omnichannel-ecommerce
@@ -165,16 +175,12 @@ Chứng chỉ nằm ở `/etc/letsencrypt/live/huyecommerce.duckdns.org/` (hết
 
 ## Áp dụng bản cập nhật frontend + Loki/Jaeger lên VPS
 
-Cron tự kéo code và image, nhưng các bước sau phải làm tay **một lần**:
+CD tự cập nhật code và image, nhưng các bước sau phải làm tay **một lần**:
 
-1. **GHCR:** sau lần build đầu, package `omnichannel-frontend` mặc định là *private*. Vào GitHub → *Packages* → `omnichannel-frontend` → *Package settings* → *Change visibility* → đặt cùng quyền với 6 image cũ (Public, hoặc giữ Private nếu VPS đã `docker login ghcr.io`). Nếu VPS không kéo được image này, `docker compose pull` báo lỗi và cron dừng deploy cả hệ thống.
-2. **Script cron:** chép lại bản mới (đã thêm `frontend` vào danh sách image):
-   ```bash
-   cp /home/huy/omnichannel-ecommerce/scripts/deploy/auto-deploy.sh /home/huy/deploy/auto-deploy.sh
-   ```
-3. **`.env` trên VPS:** thêm `DEPLOY_ENV=prod` và đổi `VNPAY_RETURN_URL=https://huyecommerce.duckdns.org/payment/vnpay-return`. `PAYMENT_WEBHOOK_SECRET` đã có sẵn (frontend dùng chung để ký webhook cổng MOCK).
-4. **Nginx:** chép cấu hình mới (`/` → frontend, `/api/v1/` → gateway) theo mục *Nginx + HTTPS* ở trên rồi `sudo nginx -t && sudo systemctl reload nginx`.
-5. **RAM:** frontend + Loki + Promtail + Jaeger thêm khoảng 1 GB (giới hạn 256M + 256M + 128M + 384M). Kiểm tra `free -h` và `docker stats --no-stream` sau khi lên.
+1. **GHCR:** sau lần build đầu, package `omnichannel-frontend` mặc định là *private*. Vào GitHub → *Packages* → `omnichannel-frontend` → *Package settings* → *Change visibility* → đặt cùng quyền với 6 image cũ (Public, hoặc giữ Private nếu VPS đã `docker login ghcr.io`). Nếu VPS không kéo được image này, `docker compose pull` báo lỗi và job deploy dừng (bản đang chạy giữ nguyên).
+2. **`.env` trên VPS:** thêm `DEPLOY_ENV=prod` và đổi `VNPAY_RETURN_URL=https://huyecommerce.duckdns.org/payment/vnpay-return`. `PAYMENT_WEBHOOK_SECRET` đã có sẵn (frontend dùng chung để ký webhook cổng MOCK).
+3. **Nginx:** chép cấu hình mới (`/` → frontend, `/api/v1/` → gateway) theo mục *Nginx + HTTPS* ở trên rồi `sudo nginx -t && sudo systemctl reload nginx`.
+4. **RAM:** frontend + Loki + Promtail + Jaeger thêm khoảng 1 GB (giới hạn 256M + 256M + 128M + 384M). Kiểm tra `free -h` và `docker stats --no-stream` sau khi lên.
 
 ## VNPAY sandbox trên VPS
 

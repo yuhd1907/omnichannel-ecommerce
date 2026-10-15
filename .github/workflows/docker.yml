@@ -1,6 +1,8 @@
-# Build + push 7 image (6 service + frontend) len GHCR khi push main.
-# Deploy kieu pull: cron tren VPS chay scripts/deploy/auto-deploy.sh moi 2 phut, keo image moi ve
-# (nha cung cap VPS chan SSH tu GitHub Actions; ly do o docs/Scope_Adjustments.md muc 6).
+# Push main -> unit test -> build + push 7 image (6 service + frontend) len GHCR, tag sha-<commit> va latest
+# -> job "Deploy to VPS": appleboy/ssh-action SSH vao VPS, dua repo ve dung commit nay roi chay
+#    scripts/deploy/deploy.sh sha-<commit>: pull image, up --wait (health check), loi thi quay lai tag cu.
+# Production chay tag bat bien sha-<commit>, khong dung latest. Job deploy gan GitHub Environment
+# "production": bat "Required reviewers" (Settings -> Environments) neu muon duyet tay truoc khi deploy.
 name: Docker Build & Push
 
 on:
@@ -139,10 +141,20 @@ jobs:
       - build
       - frontend
     runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://huyecommerce.duckdns.org
 
     steps:
+      # Tag bat bien do docker/metadata-action (type=sha) tao: sha-<7 ky tu dau cua commit>
+      - name: Compute image tag
+        run: echo "IMAGE_TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
       - name: Deploy through SSH
-        uses: appleboy/ssh-action@v1
+        # Pin theo commit SHA thay vi tag v1 (tag co the bi doi tro sang commit khac)
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
         with:
           host: ${{ secrets.VPS_HOST }}
           port: ${{ secrets.VPS_PORT }}
@@ -151,33 +163,15 @@ jobs:
           fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
           timeout: 30s
           command_timeout: 15m
+          envs: IMAGE_TAG,DEPLOY_SHA
           script: |
             set -eu
-
             cd /home/huy/omnichannel-ecommerce
 
+            # Code (compose, script) cung commit voi image se deploy
             git fetch --prune origin main
-            git checkout main
-            git pull --ff-only origin main
+            git checkout -q main
+            git merge --ff-only "$DEPLOY_SHA"
 
-            compose() {
-              docker compose \
-                -f docker-compose.yml \
-                -f docker-compose.prod.yml \
-                "$@"
-            }
-
-            SERVICES="api-gateway identity-service product-service order-service payment-service notification-service frontend"
-
-            compose pull $SERVICES
-            compose up -d --remove-orphans --wait --wait-timeout 300
-
-            curl --fail --silent --show-error \
-              http://127.0.0.1:8080/actuator/health |
-              grep -q '"status":"UP"'
-
-            curl --fail --silent --show-error \
-              http://127.0.0.1:3001/ > /dev/null
-
-            compose ps
-            echo "Deployment completed successfully"
+            # pull -> up --wait -> health check; loi thi tu quay lai tag truoc va thoat ma 1
+            bash scripts/deploy/deploy.sh "$IMAGE_TAG"

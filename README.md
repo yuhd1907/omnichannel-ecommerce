@@ -39,7 +39,7 @@ Repo chia hai phần: [`backend/`](backend/) (Gradle multi-module, 6 service Spr
 | Giám sát | Micrometer + Prometheus + Grafana (dashboard có sẵn); log tập trung **Loki + Promtail**; trace phân tán **OpenTelemetry → Jaeger** (`traceId` trả về trong mọi response, bấm từ log sang trace trong Grafana) |
 | Frontend | Next.js 16 (App Router), TypeScript, Tailwind CSS v4, react-hook-form + zod, sonner, sweetalert2 |
 | Email | SMTP (mặc định Mailpit; Gmail/Brevo khi đặt `SMTP_*` trong `.env`), email HTML, lưu trạng thái gửi và tự gửi lại khi lỗi (backoff, tối đa 5 lần) |
-| Đóng gói / CI-CD | Docker multi-stage, Docker Compose, GitHub Actions (build + test Java và frontend) → GHCR (7 image), VPS tự kéo image |
+| Đóng gói / CI-CD | Docker multi-stage, Docker Compose, GitHub Actions (build + test Java và frontend) → GHCR (7 image) → deploy lên VPS qua SSH (`appleboy/ssh-action`), tag `sha-<commit>`, tự rollback khi health check lỗi |
 | Kiểm thử | JUnit 5 + Mockito, smoke test end-to-end (`scripts/smoke-test.mjs`), k6 load test |
 
 ## Các service
@@ -133,7 +133,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --wait
 
 Lưu ý: `ufw` **không** chặn được cổng do Docker publish, vì Docker tự ghi luật iptables vượt qua ufw. Phải chặn ngay trong file compose như trên.
 
-**CD:** merge vào `main` → GitHub Actions chạy test, build 7 image và push GHCR → cron trên VPS chạy [scripts/deploy/auto-deploy.sh](scripts/deploy/auto-deploy.sh) mỗi 2 phút, thấy code hoặc image mới thì `up -d`. Lý do không dùng SSH-push: [Scope_Adjustments.md](docs/Scope_Adjustments.md) mục 6.
+**CD:** merge vào `main` → GitHub Actions ([docker.yml](.github/workflows/docker.yml)) chạy unit test → build 7 image (6 service + frontend), push GHCR với tag bất biến `sha-<commit>` (kèm `latest`) → job **Deploy to VPS** (GitHub Environment `production`) dùng `appleboy/ssh-action` (pin theo commit SHA) SSH vào VPS, đưa repo về đúng commit rồi chạy [scripts/deploy/deploy.sh](scripts/deploy/deploy.sh): pull image `sha-<commit>`, `docker compose up -d --wait` chờ health check, gọi thử gateway và frontend; lỗi thì tự quay lại tag đang chạy trước đó và job báo đỏ. Quay lại bản cũ bằng tay trên VPS: `bash scripts/deploy/deploy.sh sha-<commit cũ>` ([deployment-notes.md](docs/deployment-notes.md)).
 
 ## Chạy từng service khi phát triển
 
@@ -184,9 +184,9 @@ Năm database được tạo bởi [infra/postgres/init-databases.sql](infra/pos
 │   ├── export-openapi.sh         # xuất OpenAPI spec → docs/api/
 │   ├── load-test/                # k6: flash sale 100 người / kho 10, thông lượng 1000 req/s
 │   ├── sql/                      # reset / kiểm tra kho, dấu vết Saga của một đơn
-│   └── deploy/                   # auto-deploy.sh (cron trên VPS kéo image GHCR)
+│   └── deploy/                   # deploy.sh (Actions gọi qua SSH: deploy/rollback theo tag sha-<commit>)
 ├── docs/                         # đề tài, thiết kế DDD/API, OpenAPI spec, sơ đồ, kết quả load test, kịch bản demo
-├── .github/workflows/            # ci.yml (test backend + frontend), docker.yml (build + push 7 image)
+├── .github/workflows/            # ci.yml (test backend + frontend), docker.yml (test → build + push 7 image → deploy qua SSH)
 ├── docker-compose.yml            # local: build từ backend/ và frontend/, mở cổng để debug
 ├── docker-compose.prod.yml       # prod: image GHCR, chỉ gateway + frontend cho Nginx
 └── .env.example                  # dùng chung cho compose và Gradle bootRun
